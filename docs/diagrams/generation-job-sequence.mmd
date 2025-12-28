@@ -1,0 +1,21 @@
+sequenceDiagram
+  participant C as Client
+  participant S as Session Server
+  participant O as Generation Orchestrator
+  participant H as LLMHub
+  participant W as Worker
+  participant A as Asset Store (S3/CDN)
+
+  C->>S: spawn prompt
+  S->>O: createJob(prompt, context)
+  S-->>C: spawn placeholder (proxy asset)
+  O->>H: generate structured recipe
+  H-->>O: recipe + model trace
+  O->>W: run generation plan
+  W->>H: image/3D calls
+  H-->>W: outputs
+  W->>W: postprocess + validate
+  W->>A: upload GLB + textures
+  O-->>S: job ready + assetId
+  S-->>C: asset_ready(assetId)
+  C->>A: fetch asset

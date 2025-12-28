@@ -1,0 +1,15 @@
+{
+  "name": "forge-mode",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run -w @forge/web dev",
+    "dev:mobile": "npm run -w @forge/mobile start",
+    "dev:engine": "npm run -w @forge/engine dev",
+    "build:web": "npm run -w @forge/web build",
+    "build:engine": "npm run -w @forge/engine build"
+  }
+}

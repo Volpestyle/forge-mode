@@ -1,0 +1,11 @@
+stateDiagram-v2
+  [*] --> queued
+  queued --> generating: worker claimed
+  generating --> postprocess: mesh/texture complete
+  postprocess --> ready: validate + publish
+  generating --> failed: timeout/error
+  postprocess --> failed: validation error
+  failed --> generating: retry (attempt < max)
+  failed --> ready: fallback policy success
+  failed --> [*]: keep_placeholder
+  ready --> [*]

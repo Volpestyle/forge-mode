@@ -1,0 +1,10 @@
+{
+  "expo": {
+    "name": "Forge Mode",
+    "slug": "forge-mode",
+    "version": "0.0.1",
+    "orientation": "landscape",
+    "platforms": ["ios", "android"],
+    "assetBundlePatterns": ["**/*"]
+  }
+}
