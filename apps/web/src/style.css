@@ -102,6 +102,14 @@ canvas {
   color: #f0f4f7;
 }
 
+.prompt-select {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 6px 8px;
+  color: #f0f4f7;
+}
+
 .button {
   border: none;
   border-radius: 8px;

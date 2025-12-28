@@ -16,8 +16,21 @@ import { createDefaultEngine, createEmptyInput, Engine, EngineMode, Entity } fro
 import { ApiClient } from "./src/services/apiClient";
 import { LocalLibrary } from "./src/services/library";
 import { Prefab } from "@forge/shared";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+const findFirstMesh = (object: THREE.Object3D): THREE.Mesh | null => {
+  if (object instanceof THREE.Mesh) {
+    return object;
+  }
+  let found: THREE.Mesh | null = null;
+  object.traverse((child) => {
+    if (!found && child instanceof THREE.Mesh) {
+      found = child;
+    }
+  });
+  return found;
+};
 
 export default function App() {
   const engineRef = useRef<Engine | null>(null);
@@ -31,9 +44,13 @@ export default function App() {
   const apiBase = (process.env.EXPO_PUBLIC_API_BASE as string | undefined) ?? "http://localhost:8080";
   const apiRef = useRef(new ApiClient(apiBase));
   const textureLoaderRef = useRef(new THREE.TextureLoader());
+  const gltfLoaderRef = useRef(new GLTFLoader());
 
   const [mode, setMode] = useState<EngineMode>("fly");
   const [prompt, setPrompt] = useState("");
+  const [meshStrategy, setMeshStrategy] = useState<"procedural" | "text_to_3d" | "image_to_3d">(
+    "procedural"
+  );
   const [jobs, setJobs] = useState<
     Array<{ jobId: string; prompt: string; status: string; thumbnailUrl?: string }>
   >([]);
@@ -73,7 +90,7 @@ export default function App() {
           return;
         }
         const asset = await apiRef.current.getAsset(event.assetId);
-        const position = job.entity?.mesh.position.clone() ?? new THREE.Vector3(0, 2, 0);
+        const position = job.entity?.object.position.clone() ?? new THREE.Vector3(0, 2, 0);
         if (job.entity) {
           engineRef.current.removeEntity(job.entity);
         }
@@ -87,7 +104,11 @@ export default function App() {
           if (albedo) {
             textureLoaderRef.current.load(albedo.url, (texture) => {
               texture.colorSpace = THREE.SRGBColorSpace;
-              const material = entity.mesh.material as THREE.MeshStandardMaterial;
+              const target = findFirstMesh(entity.object);
+              if (!target) {
+                return;
+              }
+              const material = target.material as THREE.MeshStandardMaterial;
               material.map = texture;
               material.color.set(0xffffff);
               material.needsUpdate = true;
@@ -102,6 +123,27 @@ export default function App() {
               : entry
           )
         );
+        if (asset.files?.glbUrl) {
+          gltfLoaderRef.current.load(asset.files.glbUrl, (gltf) => {
+            engineRef.current?.replaceEntityObject(entity, gltf.scene, { preserveSize: true });
+            if (asset.files?.textures?.length) {
+              const albedo = asset.files.textures.find((entry) => entry.type === "albedo");
+              if (albedo) {
+                textureLoaderRef.current.load(albedo.url, (texture) => {
+                  texture.colorSpace = THREE.SRGBColorSpace;
+                  const target = findFirstMesh(entity.object);
+                  if (!target) {
+                    return;
+                  }
+                  const material = target.material as THREE.MeshStandardMaterial;
+                  material.map = texture;
+                  material.color.set(0xffffff);
+                  material.needsUpdate = true;
+                });
+              }
+            }
+          });
+        }
         selectedRef.current = entity;
         setInspectorTick((value) => value + 1);
       }
@@ -231,7 +273,12 @@ export default function App() {
       response = await apiRef.current.createJob({
         prompt: trimmed,
         assetType: "prop",
-        draft: true
+        draft: true,
+        generationPlan: {
+          meshStrategy,
+          textureStrategy: "generated_pbr",
+          lods: true
+        }
       });
     } catch (error) {
       setPrompt(trimmed);
@@ -271,7 +318,7 @@ export default function App() {
     if (!engine || !selected) {
       return;
     }
-    const next = Math.max(0.2, selected.mesh.scale.x + delta);
+    const next = Math.max(0.2, selected.object.scale.x + delta);
     engine.applyEntityTransform(selected, { scale: { x: next, y: next, z: next } });
     setInspectorTick((value) => value + 1);
   };
@@ -366,6 +413,21 @@ export default function App() {
             <Text style={styles.buttonText}>Spawn</Text>
           </Pressable>
         </View>
+        <View style={styles.meshRow}>
+          {(["procedural", "text_to_3d"] as const).map((value) => (
+            <Pressable
+              key={value}
+              onPress={() => setMeshStrategy(value)}
+              style={({ pressed }) => [
+                styles.meshButton,
+                meshStrategy === value ? styles.meshButtonActive : null,
+                pressed ? styles.modeButtonPressed : null
+              ]}
+            >
+              <Text style={styles.meshButtonText}>{value.replace(\"_\", \" \")}</Text>
+            </Pressable>
+          ))}
+        </View>
       </View>
 
       <View style={styles.queuePanel}>
@@ -395,8 +457,8 @@ export default function App() {
         ) : (
           <View key={inspectorTick}>
             <Text style={styles.inspectorText}>ID: {selectedEntity.id}</Text>
-            <Text style={styles.inspectorText}>Pos: {selectedEntity.mesh.position.toArray().map((v) => v.toFixed(2)).join(", ")}</Text>
-            <Text style={styles.inspectorText}>Scale: {selectedEntity.mesh.scale.x.toFixed(2)}</Text>
+            <Text style={styles.inspectorText}>Pos: {selectedEntity.object.position.toArray().map((v) => v.toFixed(2)).join(", ")}</Text>
+            <Text style={styles.inspectorText}>Scale: {selectedEntity.object.scale.x.toFixed(2)}</Text>
             <View style={styles.inspectorRow}>
               <Pressable style={styles.buttonTiny} onPress={() => handleScaleSelected(-0.1)}>
                 <Text style={styles.buttonText}>Scale -</Text>
@@ -552,6 +614,25 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 6,
     alignItems: "center"
+  },
+  meshRow: {
+    flexDirection: "row",
+    gap: 6,
+    marginTop: 6
+  },
+  meshButton: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    backgroundColor: "rgba(255, 255, 255, 0.08)",
+    borderRadius: 8
+  },
+  meshButtonActive: {
+    backgroundColor: "rgba(127, 212, 255, 0.65)"
+  },
+  meshButtonText: {
+    color: "#f0f4f7",
+    fontSize: 10,
+    textTransform: "uppercase"
   },
   promptInput: {
     flex: 1,

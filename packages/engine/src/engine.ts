@@ -12,7 +12,7 @@ export type Entity = {
   assetId?: string;
   name?: string;
   recipe?: Recipe;
-  mesh: THREE.Mesh;
+  object: THREE.Object3D;
   body: SimpleRigidBody;
   baseHalfSize: THREE.Vector3;
   pickupable: boolean;
@@ -104,12 +104,13 @@ export class Engine {
 
     const entity: Entity = {
       id: `ent_${Math.random().toString(36).slice(2, 8)}`,
-      mesh,
+      object: mesh,
       body,
       baseHalfSize: size.clone().multiplyScalar(0.5),
       pickupable: true
     };
 
+    this.tagEntityObject(entity.object, entity.id);
     this.entities.push(entity);
     return entity;
   }
@@ -142,12 +143,13 @@ export class Engine {
       assetId: options.assetId,
       name: options.recipe.name,
       recipe: options.recipe,
-      mesh,
+      object: mesh,
       body,
       baseHalfSize,
       pickupable: options.recipe.interaction?.pickup ?? true
     };
 
+    this.tagEntityObject(entity.object, entity.id);
     this.entities.push(entity);
     return entity;
   }
@@ -171,7 +173,7 @@ export class Engine {
       if (this.heldEntity === entity) {
         continue;
       }
-      entity.mesh.position.copy(entity.body.position);
+      entity.object.position.copy(entity.body.position);
     }
   }
 
@@ -180,12 +182,68 @@ export class Engine {
   }
 
   removeEntity(entity: Entity) {
-    this.scene.remove(entity.mesh);
+    this.scene.remove(entity.object);
     this.physics.removeBody(entity.body);
     const index = this.entities.indexOf(entity);
     if (index >= 0) {
       this.entities.splice(index, 1);
     }
+  }
+
+  replaceEntityObject(entity: Entity, object: THREE.Object3D, options?: { preserveSize?: boolean }) {
+    const position = entity.object.position.clone();
+    const rotation = entity.object.rotation.clone();
+    const scale = entity.object.scale.clone();
+    const targetHalfSize = entity.baseHalfSize.clone();
+
+    this.scene.remove(entity.object);
+    entity.object = object;
+    entity.object.position.copy(position);
+    entity.object.rotation.copy(rotation);
+    entity.object.scale.copy(scale);
+    if (options?.preserveSize) {
+      const bounds = new THREE.Box3().setFromObject(entity.object);
+      const size = new THREE.Vector3();
+      bounds.getSize(size);
+      const scaleFix = new THREE.Vector3(
+        size.x === 0 ? 1 : (targetHalfSize.x * 2) / size.x,
+        size.y === 0 ? 1 : (targetHalfSize.y * 2) / size.y,
+        size.z === 0 ? 1 : (targetHalfSize.z * 2) / size.z
+      );
+      entity.object.scale.multiply(scaleFix);
+    }
+    this.tagEntityObject(entity.object, entity.id);
+    this.updateBaseHalfSize(entity);
+    this.scene.add(entity.object);
+  }
+
+  private tagEntityObject(object: THREE.Object3D, entityId: string) {
+    object.traverse((child) => {
+      child.userData.entityId = entityId;
+      if (child instanceof THREE.Mesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+  }
+
+  private findEntityForObject(object: THREE.Object3D) {
+    let current: THREE.Object3D | null = object;
+    while (current) {
+      const entityId = current.userData.entityId as string | undefined;
+      if (entityId) {
+        return this.entities.find((entity) => entity.id === entityId) ?? null;
+      }
+      current = current.parent;
+    }
+    return null;
+  }
+
+  private updateBaseHalfSize(entity: Entity) {
+    const bounds = new THREE.Box3().setFromObject(entity.object);
+    const size = new THREE.Vector3();
+    bounds.getSize(size);
+    entity.baseHalfSize.copy(size.multiplyScalar(0.5));
   }
 
   pickEntityAtPointer(pointer: InputSnapshot["pointer"], options?: { pickupableOnly?: boolean }) {
@@ -194,16 +252,15 @@ export class Engine {
       return null;
     }
 
-    const meshes = this.entities
+    const objects = this.entities
       .filter((entity) => (options?.pickupableOnly ? entity.pickupable : true))
-      .map((entity) => entity.mesh);
-    const hits = this.raycaster.intersectObjects(meshes, false);
+      .map((entity) => entity.object);
+    const hits = this.raycaster.intersectObjects(objects, true);
     if (hits.length === 0) {
       return null;
     }
 
-    const hitMesh = hits[0].object;
-    return this.entities.find((entity) => entity.mesh === hitMesh) ?? null;
+    return this.findEntityForObject(hits[0].object);
   }
 
   applyEntityTransform(
@@ -215,14 +272,14 @@ export class Engine {
     }
   ) {
     if (transform.position) {
-      entity.mesh.position.set(transform.position.x, transform.position.y, transform.position.z);
-      entity.body.position.copy(entity.mesh.position);
+      entity.object.position.set(transform.position.x, transform.position.y, transform.position.z);
+      entity.body.position.copy(entity.object.position);
     }
     if (transform.rotation) {
-      entity.mesh.rotation.set(transform.rotation.x, transform.rotation.y, transform.rotation.z);
+      entity.object.rotation.set(transform.rotation.x, transform.rotation.y, transform.rotation.z);
     }
     if (transform.scale) {
-      entity.mesh.scale.set(transform.scale.x, transform.scale.y, transform.scale.z);
+      entity.object.scale.set(transform.scale.x, transform.scale.y, transform.scale.z);
       entity.body.size
         .copy(entity.baseHalfSize)
         .multiply(new THREE.Vector3(transform.scale.x, transform.scale.y, transform.scale.z));
@@ -266,7 +323,7 @@ export class Engine {
         .addScaledVector(forward, this.config.holdDistance);
 
       this.heldEntity.body.position.copy(holdPoint);
-      this.heldEntity.mesh.position.copy(holdPoint);
+      this.heldEntity.object.position.copy(holdPoint);
       this.heldEntity.body.velocity.set(0, 0, 0);
     }
 

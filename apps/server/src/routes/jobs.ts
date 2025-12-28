@@ -37,7 +37,9 @@ export const registerJobRoutes = (
 
     await store.createJob(job);
 
-    orchestrator.runJob(job, payload.assetType).catch((error) => {
+    orchestrator
+      .runJob(job, { assetType: payload.assetType, generationPlan: payload.generationPlan })
+      .catch((error) => {
       void error;
     });
 

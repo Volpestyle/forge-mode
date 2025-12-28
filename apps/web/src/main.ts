@@ -4,6 +4,7 @@ import { WebInput } from "./input/WebInput";
 import { ApiClient } from "./services/apiClient";
 import { LocalLibrary } from "./services/library";
 import "./style.css";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) {
@@ -51,6 +52,7 @@ const engine = createDefaultEngine(viewport);
 const input = new WebInput(canvas);
 const library = new LocalLibrary();
 const textureLoader = new THREE.TextureLoader();
+const gltfLoader = new GLTFLoader();
 
 const apiBase = (import.meta as { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE ??
   "http://localhost:8080";
@@ -62,6 +64,7 @@ engine.setMode(mode);
 input.setPointerLockEnabled(mode === "fps");
 
 let selected: Entity | null = null;
+let meshStrategy: "procedural" | "text_to_3d" | "image_to_3d" = "procedural";
 
 const jobs = new Map<
   string,
@@ -121,6 +124,19 @@ const getSpawnPosition = () => {
   return engine.camera.position.clone().addScaledVector(forward, 6);
 };
 
+const findFirstMesh = (object: THREE.Object3D): THREE.Mesh | null => {
+  if (object instanceof THREE.Mesh) {
+    return object;
+  }
+  let found: THREE.Mesh | null = null;
+  object.traverse((child) => {
+    if (!found && child instanceof THREE.Mesh) {
+      found = child;
+    }
+  });
+  return found;
+};
+
 const applyTextures = (entity: Entity, textures?: Array<{ type: string; url: string }>) => {
   const albedo = textures?.find((entry) => entry.type === "albedo");
   if (!albedo) {
@@ -128,7 +144,11 @@ const applyTextures = (entity: Entity, textures?: Array<{ type: string; url: str
   }
   textureLoader.load(albedo.url, (texture) => {
     texture.colorSpace = THREE.SRGBColorSpace;
-    const material = entity.mesh.material as THREE.MeshStandardMaterial;
+    const target = findFirstMesh(entity.object);
+    if (!target) {
+      return;
+    }
+    const material = target.material as THREE.MeshStandardMaterial;
     material.map = texture;
     material.color.set(0xffffff);
     material.needsUpdate = true;
@@ -148,6 +168,9 @@ const renderPromptPanel = () => {
   promptInput.placeholder = "Describe an object to spawn...";
   promptInput.className = "prompt-input";
 
+  const meshSelect = document.createElement("select");
+  meshSelect.className = "prompt-select";
+  meshSelect.innerHTML = `\n    <option value=\"procedural\">Procedural</option>\n    <option value=\"text_to_3d\">Text to 3D</option>\n    <option value=\"image_to_3d\">Image to 3D</option>\n  `;\n  meshSelect.value = meshStrategy;\n  meshSelect.addEventListener(\"change\", () => {\n    const next = meshSelect.value as typeof meshStrategy;\n    meshStrategy = next;\n  });\n+
   const submit = document.createElement("button");
   submit.textContent = "Spawn";
   submit.className = "button";
@@ -162,7 +185,8 @@ const renderPromptPanel = () => {
       const response = await api.createJob({
         prompt,
         assetType: "prop",
-        draft: true
+        draft: true,
+        generationPlan: {\n          meshStrategy,\n          textureStrategy: \"generated_pbr\",\n          lods: true\n        }
       });
       const placeholderEntity = engine.spawnBox({
         position: getSpawnPosition(),
@@ -181,7 +205,7 @@ const renderPromptPanel = () => {
     }
   });
 
-  inputRow.append(promptInput, submit);
+  inputRow.append(promptInput, meshSelect, submit);
   promptPanel.append(title, inputRow);
 };
 
@@ -252,9 +276,9 @@ const renderInspectorPanel = () => {
     inspectorPanel.appendChild(row);
   };
 
-  const position = selected.mesh.position;
-  const rotation = selected.mesh.rotation;
-  const scale = selected.mesh.scale;
+  const position = selected.object.position;
+  const rotation = selected.object.rotation;
+  const scale = selected.object.scale;
 
   addField("Pos X", position.x, (next) => {
     engine.applyEntityTransform(selected!, { position: { x: next, y: position.y, z: position.z } });
@@ -364,7 +388,7 @@ api.onEvent(async (event) => {
       return;
     }
     const asset = await api.getAsset(event.assetId);
-    const position = job.entity?.mesh.position.clone() ?? getSpawnPosition();
+    const position = job.entity?.object.position.clone() ?? getSpawnPosition();
     if (job.entity) {
       engine.removeEntity(job.entity);
     }
@@ -374,6 +398,12 @@ api.onEvent(async (event) => {
       assetId: asset.assetId
     });
     applyTextures(entity, asset.files?.textures);
+    if (asset.files?.glbUrl) {
+      gltfLoader.load(asset.files.glbUrl, (gltf) => {
+        engine.replaceEntityObject(entity, gltf.scene, { preserveSize: true });
+        applyTextures(entity, asset.files?.textures);
+      });
+    }
     jobs.set(event.jobId, {
       ...job,
       status: "ready",

@@ -21,6 +21,12 @@ Monorepo for the Prompt-to-World sandbox. MVP1 adds prompt-to-recipe jobs and a 
 - Texture + thumbnail generation (LLMHub image or SVG fallback)
 - Automatic texture application to procedural meshes
 
+## MVP3 features
+
+- Text-to-3D mesh generation (LLMHub mesh or placeholder GLB fallback)
+- GLB storage via local object store (served from `/storage`)
+- Client-side GLB streaming + replacement
+
 ## Local setup
 
 ```bash
@@ -41,6 +47,10 @@ Environment (optional):
 - `LLMHUB_INTENT_PATH`
 - `LLMHUB_IMAGE_MODEL`
 - `LLMHUB_IMAGE_PATH`
+- `LLMHUB_MESH_MODEL`
+- `LLMHUB_MESH_PATH`
+- `PUBLIC_BASE_URL` (defaults to `http://localhost:8080`)
+- `OBJECT_STORE` (defaults to `local`)
 
 ## Run web
 
