@@ -1,6 +1,6 @@
 # Forge Mode
 
-Monorepo for the Prompt-to-World sandbox. This milestone ships MVP0 (core sandbox, no AI).
+Monorepo for the Prompt-to-World sandbox. MVP1 adds prompt-to-recipe jobs and a local prefab library.
 
 ## MVP0 features
 
@@ -10,11 +10,30 @@ Monorepo for the Prompt-to-World sandbox. This milestone ships MVP0 (core sandbo
 - Basic terrain sculpt (raise/lower)
 - Web + React Native (Expo GL) clients
 
+## MVP1 features
+
+- Prompt -> structured recipe (LLMHub or mock) -> procedural spawn
+- Generation job queue + realtime events (WebSocket)
+- Inspector edits and local prefab library
+
 ## Local setup
 
 ```bash
 npm install
 ```
+
+## Run server (MVP1)
+
+```bash
+npm run dev:engine
+npm run dev:server
+```
+
+Environment (optional):
+- `LLMHUB_BASE_URL`
+- `LLMHUB_API_KEY`
+- `LLMHUB_INTENT_MODEL`
+- `LLMHUB_INTENT_PATH`
 
 ## Run web
 
@@ -41,3 +60,5 @@ Controls (mobile):
 - Left pad: move
 - Right pad: look / pick / sculpt
 - Buttons: Up/Down/Sprint and Lower (for sculpt)
+
+Set `EXPO_PUBLIC_API_BASE` to point at the server (default: `http://localhost:8080`).

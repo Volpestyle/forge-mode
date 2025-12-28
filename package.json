@@ -9,7 +9,9 @@
     "dev:web": "npm run -w @forge/web dev",
     "dev:mobile": "npm run -w @forge/mobile start",
     "dev:engine": "npm run -w @forge/engine dev",
+    "dev:server": "npm run -w @forge/server dev",
     "build:web": "npm run -w @forge/web build",
-    "build:engine": "npm run -w @forge/engine build"
+    "build:engine": "npm run -w @forge/engine build",
+    "build:server": "npm run -w @forge/server build"
   }
 }

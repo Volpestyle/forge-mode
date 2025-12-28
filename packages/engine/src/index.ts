@@ -5,3 +5,4 @@ export { defaultEngineConfig } from "./types";
 export { Terrain } from "./terrain";
 export type { TerrainOptions } from "./terrain";
 export { createEmptyInput } from "./input";
+export { createProceduralMesh } from "./procedural";

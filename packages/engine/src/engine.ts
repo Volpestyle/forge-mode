@@ -4,11 +4,17 @@ import { FpsController } from "./controls/fpsController";
 import { SimplePhysicsWorld, SimpleRigidBody } from "./physics";
 import { Terrain } from "./terrain";
 import { EngineConfig, EngineMode, InputSnapshot, defaultEngineConfig } from "./types";
+import { Recipe } from "@forge/shared";
+import { createProceduralMesh } from "./procedural";
 
 export type Entity = {
   id: string;
+  assetId?: string;
+  name?: string;
+  recipe?: Recipe;
   mesh: THREE.Mesh;
   body: SimpleRigidBody;
+  baseHalfSize: THREE.Vector3;
   pickupable: boolean;
 };
 
@@ -100,7 +106,46 @@ export class Engine {
       id: `ent_${Math.random().toString(36).slice(2, 8)}`,
       mesh,
       body,
+      baseHalfSize: size.clone().multiplyScalar(0.5),
       pickupable: true
+    };
+
+    this.entities.push(entity);
+    return entity;
+  }
+
+  spawnProceduralAsset(options: {
+    recipe: Recipe;
+    position: THREE.Vector3;
+    assetId?: string;
+    entityId?: string;
+  }) {
+    const { mesh, baseHalfSize } = createProceduralMesh(options.recipe);
+    const body: SimpleRigidBody = {
+      position: options.position.clone(),
+      velocity: new THREE.Vector3(),
+      size: baseHalfSize.clone(),
+      dynamic: options.recipe.physics?.body !== "static",
+      mass: options.recipe.physics?.massKg ?? 1,
+      restitution: options.recipe.physics?.restitution ?? 0.2,
+      friction: options.recipe.physics?.friction ?? 4,
+      grounded: false,
+      sleeping: false
+    };
+
+    mesh.position.copy(body.position);
+    this.scene.add(mesh);
+    this.physics.addBody(body);
+
+    const entity: Entity = {
+      id: options.entityId ?? `ent_${Math.random().toString(36).slice(2, 8)}`,
+      assetId: options.assetId,
+      name: options.recipe.name,
+      recipe: options.recipe,
+      mesh,
+      body,
+      baseHalfSize,
+      pickupable: options.recipe.interaction?.pickup ?? true
     };
 
     this.entities.push(entity);
@@ -116,7 +161,7 @@ export class Engine {
 
     if (this.mode === "sculpt") {
       this.applySculpt(input, dt);
-    } else {
+    } else if (this.mode === "fps") {
       this.handlePickupAndThrow(input);
     }
 
@@ -128,6 +173,77 @@ export class Engine {
       }
       entity.mesh.position.copy(entity.body.position);
     }
+  }
+
+  getEntityById(id: string) {
+    return this.entities.find((entity) => entity.id === id) ?? null;
+  }
+
+  removeEntity(entity: Entity) {
+    this.scene.remove(entity.mesh);
+    this.physics.removeBody(entity.body);
+    const index = this.entities.indexOf(entity);
+    if (index >= 0) {
+      this.entities.splice(index, 1);
+    }
+  }
+
+  pickEntityAtPointer(pointer: InputSnapshot["pointer"], options?: { pickupableOnly?: boolean }) {
+    const ray = this.createPointerRay(pointer);
+    if (!ray) {
+      return null;
+    }
+
+    const meshes = this.entities
+      .filter((entity) => (options?.pickupableOnly ? entity.pickupable : true))
+      .map((entity) => entity.mesh);
+    const hits = this.raycaster.intersectObjects(meshes, false);
+    if (hits.length === 0) {
+      return null;
+    }
+
+    const hitMesh = hits[0].object;
+    return this.entities.find((entity) => entity.mesh === hitMesh) ?? null;
+  }
+
+  applyEntityTransform(
+    entity: Entity,
+    transform: {
+      position?: { x: number; y: number; z: number };
+      rotation?: { x: number; y: number; z: number };
+      scale?: { x: number; y: number; z: number };
+    }
+  ) {
+    if (transform.position) {
+      entity.mesh.position.set(transform.position.x, transform.position.y, transform.position.z);
+      entity.body.position.copy(entity.mesh.position);
+    }
+    if (transform.rotation) {
+      entity.mesh.rotation.set(transform.rotation.x, transform.rotation.y, transform.rotation.z);
+    }
+    if (transform.scale) {
+      entity.mesh.scale.set(transform.scale.x, transform.scale.y, transform.scale.z);
+      entity.body.size
+        .copy(entity.baseHalfSize)
+        .multiply(new THREE.Vector3(transform.scale.x, transform.scale.y, transform.scale.z));
+    }
+    entity.body.sleeping = false;
+  }
+
+  applyEntityPhysics(
+    entity: Entity,
+    physics: { mass?: number; friction?: number; restitution?: number }
+  ) {
+    if (physics.mass !== undefined) {
+      entity.body.mass = physics.mass;
+    }
+    if (physics.friction !== undefined) {
+      entity.body.friction = physics.friction;
+    }
+    if (physics.restitution !== undefined) {
+      entity.body.restitution = physics.restitution;
+    }
+    entity.body.sleeping = false;
   }
 
   private handlePickupAndThrow(input: InputSnapshot) {
@@ -181,19 +297,7 @@ export class Engine {
   }
 
   private pickEntity(input: InputSnapshot) {
-    const ray = this.createPointerRay(input.pointer);
-    if (!ray) {
-      return null;
-    }
-
-    const meshes = this.entities.filter((entity) => entity.pickupable).map((entity) => entity.mesh);
-    const hits = this.raycaster.intersectObjects(meshes, false);
-    if (hits.length === 0) {
-      return null;
-    }
-
-    const hitMesh = hits[0].object;
-    return this.entities.find((entity) => entity.mesh === hitMesh) ?? null;
+    return this.pickEntityAtPointer(input.pointer, { pickupableOnly: true });
   }
 
   private intersectTerrain(pointer: InputSnapshot["pointer"]) {

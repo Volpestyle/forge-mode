@@ -1,5 +1,5 @@
 {
-  "name": "@forge/engine",
+  "name": "@forge/shared",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -18,7 +18,6 @@
     "dev": "tsc -p tsconfig.build.json -w"
   },
   "dependencies": {
-    "@forge/shared": "workspace:*",
-    "three": "0.182.0"
+    "zod": "^3.23.8"
   }
 }

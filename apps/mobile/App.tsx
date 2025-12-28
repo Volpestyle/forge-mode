@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ExpoWebGLRenderingContext, GLView } from "expo-gl";
 import { Renderer } from "expo-three";
 import {
@@ -7,10 +7,14 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   View
 } from "react-native";
 import * as THREE from "three";
-import { createDefaultEngine, createEmptyInput, Engine, EngineMode } from "@forge/engine";
+import { createDefaultEngine, createEmptyInput, Engine, EngineMode, Entity } from "@forge/engine";
+import { ApiClient } from "./src/services/apiClient";
+import { LocalLibrary } from "./src/services/library";
+import { Prefab } from "@forge/shared";
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
@@ -20,10 +24,75 @@ export default function App() {
   const viewportRef = useRef({ width: 0, height: 0 });
   const inputRef = useRef(createEmptyInput());
   const modeRef = useRef<EngineMode>("fly");
+  const selectedRef = useRef<Entity | null>(null);
+  const jobsRef = useRef(new Map<string, { entity: Entity | null; prompt: string; status: string }>());
+  const libraryRef = useRef(new LocalLibrary());
+  const apiBase = (process.env.EXPO_PUBLIC_API_BASE as string | undefined) ?? "http://localhost:8080";
+  const apiRef = useRef(new ApiClient(apiBase));
+
   const [mode, setMode] = useState<EngineMode>("fly");
+  const [prompt, setPrompt] = useState("");
+  const [jobs, setJobs] = useState<Array<{ jobId: string; prompt: string; status: string }>>([]);
+  const [prefabs, setPrefabs] = useState<Prefab[]>([]);
+  const [inspectorTick, setInspectorTick] = useState(0);
+
   const verticalRef = useRef(0);
   const sprintRef = useRef(false);
   const rightDeltaRef = useRef({ dx: 0, dy: 0 });
+
+  useEffect(() => {
+    const loadPrefabs = async () => {
+      const items = await libraryRef.current.load();
+      setPrefabs(items);
+    };
+    loadPrefabs();
+
+    apiRef.current.connectRealtime();
+    const unsubscribe = apiRef.current.onEvent(async (event) => {
+      if (event.type === "job_progress") {
+        setJobs((current) =>
+          current.map((job) =>
+            job.jobId === event.jobId ? { ...job, status: event.status } : job
+          )
+        );
+      }
+      if (event.type === "job_failed") {
+        setJobs((current) =>
+          current.map((job) =>
+            job.jobId === event.jobId ? { ...job, status: "failed" } : job
+          )
+        );
+      }
+      if (event.type === "asset_ready") {
+        const job = jobsRef.current.get(event.jobId);
+        if (!job || !engineRef.current) {
+          return;
+        }
+        const asset = await apiRef.current.getAsset(event.assetId);
+        const position = job.entity?.mesh.position.clone() ?? new THREE.Vector3(0, 2, 0);
+        if (job.entity) {
+          engineRef.current.removeEntity(job.entity);
+        }
+        const entity = engineRef.current.spawnProceduralAsset({
+          recipe: asset.generationRecipe,
+          position,
+          assetId: asset.assetId
+        });
+        jobsRef.current.set(event.jobId, { ...job, entity, status: "ready" });
+        setJobs((current) =>
+          current.map((entry) =>
+            entry.jobId === event.jobId ? { ...entry, status: "ready" } : entry
+          )
+        );
+        selectedRef.current = entity;
+        setInspectorTick((value) => value + 1);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
 
   const handleLayout = useCallback((event: LayoutChangeEvent) => {
     const { width, height } = event.nativeEvent.layout;
@@ -122,6 +191,86 @@ export default function App() {
     engineRef.current?.setMode(nextMode);
   };
 
+  const getSpawnPosition = () => {
+    const engine = engineRef.current;
+    if (!engine) {
+      return new THREE.Vector3(0, 2, 0);
+    }
+    const forward = new THREE.Vector3();
+    engine.camera.getWorldDirection(forward);
+    forward.normalize();
+    return engine.camera.position.clone().addScaledVector(forward, 6);
+  };
+
+  const handleSubmitPrompt = async () => {
+    const trimmed = prompt.trim();
+    if (!trimmed || !engineRef.current) {
+      return;
+    }
+    setPrompt("");
+    let response;
+    try {
+      response = await apiRef.current.createJob({
+        prompt: trimmed,
+        assetType: "prop",
+        draft: true
+      });
+    } catch (error) {
+      setPrompt(trimmed);
+      return;
+    }
+
+    const placeholder = engineRef.current.spawnBox({
+      position: getSpawnPosition(),
+      size: new THREE.Vector3(...response.placeholder.scaleMeters),
+      color: 0x6b7882
+    });
+
+    jobsRef.current.set(response.jobId, {
+      entity: placeholder,
+      prompt: trimmed,
+      status: response.status
+    });
+
+    setJobs((current) => [
+      ...current,
+      { jobId: response.jobId, prompt: trimmed, status: response.status }
+    ]);
+  };
+
+  const handleSavePrefab = async () => {
+    if (!selectedRef.current?.recipe) {
+      return;
+    }
+    await libraryRef.current.add(selectedRef.current.recipe);
+    const items = libraryRef.current.list();
+    setPrefabs(items);
+  };
+
+  const handleScaleSelected = (delta: number) => {
+    const engine = engineRef.current;
+    const selected = selectedRef.current;
+    if (!engine || !selected) {
+      return;
+    }
+    const next = Math.max(0.2, selected.mesh.scale.x + delta);
+    engine.applyEntityTransform(selected, { scale: { x: next, y: next, z: next } });
+    setInspectorTick((value) => value + 1);
+  };
+
+  const handleSpawnPrefab = (prefab: Prefab) => {
+    if (!engineRef.current) {
+      return;
+    }
+    const entity = engineRef.current.spawnProceduralAsset({
+      recipe: prefab.recipe,
+      position: getSpawnPosition(),
+      assetId: prefab.prefabId
+    });
+    selectedRef.current = entity;
+    setInspectorTick((value) => value + 1);
+  };
+
   const onContextCreate = async (gl: ExpoWebGLRenderingContext) => {
     const renderer = new Renderer({ gl });
     renderer.shadowMap.enabled = true;
@@ -142,6 +291,15 @@ export default function App() {
     const renderLoop = () => {
       const dt = Math.min(0.033, clock.getDelta());
       const snapshot = consumeSnapshot();
+
+      if (modeRef.current === "fly" && snapshot.pointer.primaryPressed) {
+        const hit = engine.pickEntityAtPointer(snapshot.pointer);
+        if (hit && hit.id !== selectedRef.current?.id) {
+          selectedRef.current = hit;
+          setInspectorTick((value) => value + 1);
+        }
+      }
+
       engine.update(dt, snapshot);
       renderer.render(engine.scene, engine.camera);
       gl.endFrameEXP();
@@ -151,17 +309,19 @@ export default function App() {
     renderLoop();
   };
 
+  const selectedEntity = selectedRef.current;
+
   return (
     <View style={styles.container} onLayout={handleLayout}>
       <GLView style={styles.gl} onContextCreate={onContextCreate} />
 
       <View style={styles.hud} pointerEvents="box-none">
-        <Text style={styles.title}>Forge Mode MVP0</Text>
+        <Text style={styles.title}>Forge Mode MVP1</Text>
         <View style={styles.modeRow}>
-          {["fly", "fps", "sculpt"].map((value) => (
+          {(["fly", "fps", "sculpt"] as EngineMode[]).map((value) => (
             <Pressable
               key={value}
-              onPress={() => handleModeChange(value as EngineMode)}
+              onPress={() => handleModeChange(value)}
               style={({ pressed }) => [
                 styles.modeButton,
                 mode === value ? styles.modeButtonActive : null,
@@ -172,6 +332,79 @@ export default function App() {
             </Pressable>
           ))}
         </View>
+      </View>
+
+      <View style={styles.promptPanel}>
+        <Text style={styles.panelTitle}>Prompt</Text>
+        <View style={styles.promptRow}>
+          <TextInput
+            value={prompt}
+            onChangeText={setPrompt}
+            placeholder="Describe an object..."
+            placeholderTextColor="rgba(240, 244, 247, 0.4)"
+            style={styles.promptInput}
+          />
+          <Pressable style={styles.button} onPress={handleSubmitPrompt}>
+            <Text style={styles.buttonText}>Spawn</Text>
+          </Pressable>
+        </View>
+      </View>
+
+      <View style={styles.queuePanel}>
+        <Text style={styles.panelTitle}>Queue</Text>
+        {jobs.map((job) => (
+          <View key={job.jobId} style={styles.queueRow}>
+            <Text style={styles.queuePrompt} numberOfLines={1}>
+              {job.prompt}
+            </Text>
+            <Text style={styles.queueStatus}>{job.status}</Text>
+          </View>
+        ))}
+        {jobs.length === 0 ? (
+          <Text style={styles.panelEmpty}>No jobs yet.</Text>
+        ) : null}
+      </View>
+
+      <View style={styles.inspectorPanel}>
+        <Text style={styles.panelTitle}>Inspector</Text>
+        {!selectedEntity ? (
+          <Text style={styles.panelEmpty}>Tap an object to edit.</Text>
+        ) : (
+          <View key={inspectorTick}>
+            <Text style={styles.inspectorText}>ID: {selectedEntity.id}</Text>
+            <Text style={styles.inspectorText}>Pos: {selectedEntity.mesh.position.toArray().map((v) => v.toFixed(2)).join(", ")}</Text>
+            <Text style={styles.inspectorText}>Scale: {selectedEntity.mesh.scale.x.toFixed(2)}</Text>
+            <View style={styles.inspectorRow}>
+              <Pressable style={styles.buttonTiny} onPress={() => handleScaleSelected(-0.1)}>
+                <Text style={styles.buttonText}>Scale -</Text>
+              </Pressable>
+              <Pressable style={styles.buttonTiny} onPress={() => handleScaleSelected(0.1)}>
+                <Text style={styles.buttonText}>Scale +</Text>
+              </Pressable>
+            </View>
+            <Pressable style={styles.secondaryButton} onPress={handleSavePrefab}>
+              <Text style={styles.buttonText}>Save to Library</Text>
+            </Pressable>
+          </View>
+        )}
+      </View>
+
+      <View style={styles.libraryPanel}>
+        <Text style={styles.panelTitle}>Library</Text>
+        {prefabs.length === 0 ? (
+          <Text style={styles.panelEmpty}>No prefabs yet.</Text>
+        ) : (
+          prefabs.slice(0, 4).map((prefab) => (
+            <View key={prefab.prefabId} style={styles.libraryRow}>
+              <Text style={styles.queuePrompt} numberOfLines={1}>
+                {prefab.name}
+              </Text>
+              <Pressable style={styles.buttonTiny} onPress={() => handleSpawnPrefab(prefab)}>
+                <Text style={styles.buttonText}>Spawn</Text>
+              </Pressable>
+            </View>
+          ))
+        )}
       </View>
 
       <View style={styles.leftPad} {...leftPad.panHandlers} />
@@ -279,6 +512,137 @@ const styles = StyleSheet.create({
   },
   modeButtonText: {
     color: "#f0f4f7",
+    fontSize: 11
+  },
+  promptPanel: {
+    position: "absolute",
+    top: 12,
+    right: 12,
+    width: 260,
+    padding: 10,
+    backgroundColor: "rgba(12, 18, 20, 0.72)",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(240, 244, 247, 0.2)"
+  },
+  promptRow: {
+    flexDirection: "row",
+    gap: 6,
+    alignItems: "center"
+  },
+  promptInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.2)",
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    color: "#f0f4f7"
+  },
+  panelTitle: {
+    color: "#7fd4ff",
+    fontSize: 11,
+    textTransform: "uppercase",
+    letterSpacing: 1.2,
+    marginBottom: 6
+  },
+  button: {
+    backgroundColor: "#7fd4ff",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6
+  },
+  buttonTiny: {
+    backgroundColor: "#7fd4ff",
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4
+  },
+  secondaryButton: {
+    marginTop: 6,
+    backgroundColor: "rgba(127, 212, 255, 0.4)",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6
+  },
+  buttonText: {
+    color: "#0b1216",
+    fontSize: 11,
+    fontWeight: "600"
+  },
+  queuePanel: {
+    position: "absolute",
+    top: 120,
+    right: 12,
+    width: 260,
+    padding: 10,
+    backgroundColor: "rgba(12, 18, 20, 0.72)",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(240, 244, 247, 0.2)"
+  },
+  queueRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.06)",
+    padding: 6,
+    borderRadius: 8,
+    marginBottom: 6
+  },
+  queuePrompt: {
+    color: "#f0f4f7",
+    fontSize: 11,
+    flex: 1,
+    marginRight: 6
+  },
+  queueStatus: {
+    color: "#8cc4d9",
+    fontSize: 10
+  },
+  inspectorPanel: {
+    position: "absolute",
+    top: 250,
+    right: 12,
+    width: 260,
+    padding: 10,
+    backgroundColor: "rgba(12, 18, 20, 0.72)",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(240, 244, 247, 0.2)"
+  },
+  inspectorText: {
+    color: "#f0f4f7",
+    fontSize: 11,
+    marginBottom: 4
+  },
+  inspectorRow: {
+    flexDirection: "row",
+    gap: 6,
+    marginBottom: 6
+  },
+  libraryPanel: {
+    position: "absolute",
+    top: 380,
+    right: 12,
+    width: 260,
+    padding: 10,
+    backgroundColor: "rgba(12, 18, 20, 0.72)",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(240, 244, 247, 0.2)"
+  },
+  libraryRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "rgba(255, 255, 255, 0.06)",
+    padding: 6,
+    borderRadius: 8,
+    marginBottom: 6
+  },
+  panelEmpty: {
+    color: "rgba(240, 244, 247, 0.5)",
     fontSize: 11
   },
   leftPad: {

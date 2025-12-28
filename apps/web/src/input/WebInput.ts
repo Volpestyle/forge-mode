@@ -82,10 +82,16 @@ export class WebInput {
   }
 
   private handleKeyDown = (event: KeyboardEvent) => {
+    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+      return;
+    }
     this.keys.add(event.code);
   };
 
   private handleKeyUp = (event: KeyboardEvent) => {
+    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+      return;
+    }
     this.keys.delete(event.code);
   };
 
