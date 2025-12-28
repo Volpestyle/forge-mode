@@ -68,6 +68,7 @@ export type GenerationJob = {
   jobId: string;
   requestedBy?: string;
   roomId?: string;
+  entityId?: string;
   input: {
     prompt: string;
     references?: Array<{ mime: string; url: string }>;
@@ -115,12 +116,18 @@ export type RealtimeEvent = JobProgressEvent | JobFailedEvent | AssetReadyEvent;
 
 export type JobCreateRequest = {
   roomId?: string;
+  clientId?: string;
   prompt: string;
   assetType?: Recipe["kind"];
   generationPlan?: Recipe["generationPlan"];
   references?: Array<{ mime: string; url: string }>;
   draft?: boolean;
   clientRequestId?: string;
+  spawnTransform?: {
+    position: { x: number; y: number; z: number };
+    rotation: { x: number; y: number; z: number };
+    scale: { x: number; y: number; z: number };
+  };
 };
 
 export type JobCreateResponse = {

@@ -1,10 +1,12 @@
 import * as THREE from "three";
-import { createDefaultEngine, EngineMode, Entity } from "@forge/engine";
+import { createDefaultEngine, createProceduralMesh, EngineMode, Entity } from "@forge/engine";
 import { WebInput } from "./input/WebInput";
 import { ApiClient } from "./services/apiClient";
 import { LocalLibrary } from "./services/library";
 import "./style.css";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { EntityState, Recipe, SessionServerMessage } from "@forge/shared";
+import { SessionClient } from "./services/sessionClient";
 
 const app = document.querySelector<HTMLDivElement>("#app");
 if (!app) {
@@ -58,6 +60,16 @@ const apiBase = (import.meta as { env?: { VITE_API_BASE?: string } }).env?.VITE_
   "http://localhost:8080";
 const api = new ApiClient(apiBase);
 api.connectRealtime();
+const roomId = new URLSearchParams(window.location.search).get("room") ?? "room_default";
+const sessionClient = new SessionClient(apiBase);
+const storedClientId = localStorage.getItem("forge.clientId") ?? undefined;
+let sessionClientId: string | null = storedClientId ?? null;
+let playerEntityId: string | null = null;
+sessionClient.connect(roomId, storedClientId);
+
+const networkEntities = new Map<string, Entity>();
+const ownedEntities = new Set<string>();
+const lastSentTransforms = new Map<string, THREE.Vector3>();
 
 let mode: EngineMode = "fly";
 engine.setMode(mode);
@@ -155,6 +167,80 @@ const applyTextures = (entity: Entity, textures?: Array<{ type: string; url: str
   });
 };
 
+const playerRecipe: Recipe = {
+  kind: "character",
+  name: "Player",
+  scaleMeters: [0.8, 1.8, 0.8],
+  style: "simple proxy",
+  materials: [{ type: "cloth", roughness: 0.9, color: "#5c7c99" }],
+  physics: { body: "dynamic", massKg: 90, collider: "box", friction: 4, restitution: 0.1 },
+  interaction: { pickup: false, pushable: false },
+  generationPlan: { meshStrategy: "procedural", textureStrategy: "flat", lods: false }
+};
+
+const applyAssetToEntity = async (entity: Entity, assetId: string) => {
+  const asset = await api.getAsset(assetId);
+  entity.assetId = asset.assetId;
+  entity.recipe = asset.generationRecipe;
+  const { mesh } = createProceduralMesh(asset.generationRecipe);
+  engine.replaceEntityObject(entity, mesh, { preserveSize: true });
+  applyTextures(entity, asset.files?.textures);
+  if (asset.files?.glbUrl) {
+    gltfLoader.load(asset.files.glbUrl, (gltf) => {
+      engine.replaceEntityObject(entity, gltf.scene, { preserveSize: true });
+      applyTextures(entity, asset.files?.textures);
+    });
+  }
+};
+
+const spawnEntityFromState = async (state: EntityState) => {
+  const position = new THREE.Vector3(
+    state.transform.position.x,
+    state.transform.position.y,
+    state.transform.position.z
+  );
+  const rotation = new THREE.Euler(
+    state.transform.rotation.x,
+    state.transform.rotation.y,
+    state.transform.rotation.z
+  );
+  const scale = new THREE.Vector3(
+    state.transform.scale.x,
+    state.transform.scale.y,
+    state.transform.scale.z
+  );
+
+  let entity: Entity;
+  if (state.assetId === "player_proxy") {
+    const recipe = { ...playerRecipe, scaleMeters: [scale.x, scale.y, scale.z] };
+    entity = engine.spawnProceduralAsset({ recipe, position, assetId: state.assetId, entityId: state.entityId });
+  } else if (state.assetId.startsWith("asset_")) {
+    entity = engine.spawnBox({ position, size: scale, color: 0x5b6b72, entityId: state.entityId, assetId: state.assetId });
+    await applyAssetToEntity(entity, state.assetId);
+  } else {
+    entity = engine.spawnBox({ position, size: scale, color: 0x5b6b72, entityId: state.entityId, assetId: state.assetId });
+  }
+
+  entity.object.rotation.copy(rotation);
+  networkEntities.set(state.entityId, entity);
+};
+
+const updateEntityFromState = async (state: EntityState) => {
+  const entity = networkEntities.get(state.entityId);
+  if (!entity) {
+    await spawnEntityFromState(state);
+    return;
+  }
+  if (state.assetId !== entity.assetId && state.assetId.startsWith("asset_")) {
+    await applyAssetToEntity(entity, state.assetId);
+  }
+  engine.applyEntityTransform(entity, {
+    position: state.transform.position,
+    rotation: state.transform.rotation,
+    scale: state.transform.scale
+  });
+};
+
 const renderPromptPanel = () => {
   promptPanel.innerHTML = "";
   const title = document.createElement("div");
@@ -170,7 +256,16 @@ const renderPromptPanel = () => {
 
   const meshSelect = document.createElement("select");
   meshSelect.className = "prompt-select";
-  meshSelect.innerHTML = `\n    <option value=\"procedural\">Procedural</option>\n    <option value=\"text_to_3d\">Text to 3D</option>\n    <option value=\"image_to_3d\">Image to 3D</option>\n  `;\n  meshSelect.value = meshStrategy;\n  meshSelect.addEventListener(\"change\", () => {\n    const next = meshSelect.value as typeof meshStrategy;\n    meshStrategy = next;\n  });\n+
+  meshSelect.innerHTML = `
+    <option value="procedural">Procedural</option>
+    <option value="text_to_3d">Text to 3D</option>
+    <option value="image_to_3d">Image to 3D</option>
+  `;
+  meshSelect.value = meshStrategy;
+  meshSelect.addEventListener("change", () => {
+    const next = meshSelect.value as typeof meshStrategy;
+    meshStrategy = next;
+  });
   const submit = document.createElement("button");
   submit.textContent = "Spawn";
   submit.className = "button";
@@ -182,22 +277,52 @@ const renderPromptPanel = () => {
     }
     promptInput.value = "";
     try {
+      const spawn = getSpawnPosition();
       const response = await api.createJob({
         prompt,
         assetType: "prop",
         draft: true,
-        generationPlan: {\n          meshStrategy,\n          textureStrategy: \"generated_pbr\",\n          lods: true\n        }
+        clientId: sessionClientId ?? undefined,
+        generationPlan: {
+          meshStrategy,
+          textureStrategy: "generated_pbr",
+          lods: true
+        },
+        spawnTransform: {
+          position: { x: spawn.x, y: spawn.y, z: spawn.z },
+          rotation: { x: 0, y: engine.camera.rotation.y, z: 0 },
+          scale: { x: 1, y: 1, z: 1 }
+        }
       });
       const placeholderEntity = engine.spawnBox({
-        position: getSpawnPosition(),
+        position: spawn,
         size: new THREE.Vector3(...response.placeholder.scaleMeters),
-        color: 0x6b7882
+        color: 0x6b7882,
+        entityId: response.placeholder.entityId,
+        assetId: response.placeholder.assetId
       });
       jobs.set(response.jobId, {
         status: response.status,
         entity: placeholderEntity,
         assetId: response.placeholder.assetId,
         prompt
+      });
+      ownedEntities.add(response.placeholder.entityId);
+      networkEntities.set(response.placeholder.entityId, placeholderEntity);
+      sessionClient.spawnEntity(roomId, {
+        entityId: response.placeholder.entityId,
+        assetId: response.placeholder.assetId,
+        ownerId: sessionClientId ?? undefined,
+        transform: {
+          position: { x: spawn.x, y: spawn.y, z: spawn.z },
+          rotation: { x: 0, y: engine.camera.rotation.y, z: 0 },
+          scale: { x: 1, y: 1, z: 1 }
+        },
+        physics: {
+          mass: placeholderEntity.body.mass,
+          friction: placeholderEntity.body.friction,
+          restitution: placeholderEntity.body.restitution
+        }
       });
       renderQueuePanel();
     } catch (error) {
@@ -367,6 +492,37 @@ renderQueuePanel();
 renderInspectorPanel();
 renderLibraryPanel();
 
+sessionClient.onMessage(async (message: SessionServerMessage) => {
+  if (message.type === "welcome") {
+    sessionClientId = message.clientId;
+    localStorage.setItem("forge.clientId", message.clientId);
+    playerEntityId = `player_${message.clientId}`;
+    for (const entity of message.entities) {
+      await updateEntityFromState(entity);
+    }
+  }
+  if (message.type === "entity_spawned") {
+    await updateEntityFromState(message.entity);
+  }
+  if (message.type === "entity_updated") {
+    const entity = message.entity;
+    if (entity.ownerId === sessionClientId && entity.entityId === playerEntityId) {
+      if (entity.assetId !== networkEntities.get(entity.entityId)?.assetId) {
+        await updateEntityFromState(entity);
+      }
+      return;
+    }
+    await updateEntityFromState(entity);
+  }
+  if (message.type === "entity_removed") {
+    const existing = networkEntities.get(message.entityId);
+    if (existing) {
+      engine.removeEntity(existing);
+      networkEntities.delete(message.entityId);
+    }
+  }
+});
+
 api.onEvent(async (event) => {
   if (event.type === "job_progress") {
     const job = jobs.get(event.jobId);
@@ -388,22 +544,18 @@ api.onEvent(async (event) => {
       return;
     }
     const asset = await api.getAsset(event.assetId);
-    const position = job.entity?.object.position.clone() ?? getSpawnPosition();
-    if (job.entity) {
-      engine.removeEntity(job.entity);
-    }
-    const entity = engine.spawnProceduralAsset({
-      recipe: asset.generationRecipe,
-      position,
-      assetId: asset.assetId
-    });
-    applyTextures(entity, asset.files?.textures);
-    if (asset.files?.glbUrl) {
-      gltfLoader.load(asset.files.glbUrl, (gltf) => {
-        engine.replaceEntityObject(entity, gltf.scene, { preserveSize: true });
-        applyTextures(entity, asset.files?.textures);
+    let entity = job.entity;
+    if (!entity) {
+      entity = engine.spawnBox({
+        position: getSpawnPosition(),
+        size: new THREE.Vector3(1, 1, 1),
+        color: 0x6b7882,
+        entityId: event.entityId,
+        assetId: asset.assetId
       });
+      networkEntities.set(entity.id, entity);
     }
+    await applyAssetToEntity(entity, asset.assetId);
     jobs.set(event.jobId, {
       ...job,
       status: "ready",
@@ -418,6 +570,7 @@ api.onEvent(async (event) => {
 });
 
 let last = performance.now();
+let lastNetworkSync = 0;
 const tick = (time: number) => {
   const dt = Math.min(0.033, (time - last) / 1000);
   last = time;
@@ -434,6 +587,57 @@ const tick = (time: number) => {
 
   engine.update(dt, snapshot);
   renderer.render(engine.scene, engine.camera);
+
+  if (sessionClientId && playerEntityId && time - lastNetworkSync > 120) {
+    lastNetworkSync = time;
+    sessionClient.updateEntity(roomId, playerEntityId, {
+      transform: {
+        position: {
+          x: engine.camera.position.x,
+          y: engine.camera.position.y,
+          z: engine.camera.position.z
+        },
+        rotation: {
+          x: engine.camera.rotation.x,
+          y: engine.camera.rotation.y,
+          z: engine.camera.rotation.z
+        },
+        scale: { x: 1, y: 1, z: 1 }
+      }
+    });
+
+    for (const entityId of ownedEntities) {
+      const entity = networkEntities.get(entityId);
+      if (!entity) {
+        continue;
+      }
+      const lastSent = lastSentTransforms.get(entityId);
+      const current = entity.object.position.clone();
+      if (!lastSent || lastSent.distanceTo(current) > 0.05) {
+        lastSentTransforms.set(entityId, current.clone());
+        sessionClient.updateEntity(roomId, entityId, {
+          transform: {
+            position: { x: current.x, y: current.y, z: current.z },
+            rotation: {
+              x: entity.object.rotation.x,
+              y: entity.object.rotation.y,
+              z: entity.object.rotation.z
+            },
+            scale: {
+              x: entity.object.scale.x,
+              y: entity.object.scale.y,
+              z: entity.object.scale.z
+            }
+          },
+          physics: {
+            mass: entity.body.mass,
+            friction: entity.body.friction,
+            restitution: entity.body.restitution
+          }
+        });
+      }
+    }
+  }
 
   requestAnimationFrame(tick);
 };

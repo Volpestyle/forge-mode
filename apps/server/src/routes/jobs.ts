@@ -3,11 +3,13 @@ import { nanoid } from "nanoid";
 import { GenerationJob, JobCreateRequest, JobCreateResponse, JobStatusResponse } from "@forge/shared";
 import { GenerationOrchestrator } from "../generation/orchestrator";
 import { Store } from "../store/store";
+import { SessionManager } from "../multiplayer/sessionManager";
 
 export const registerJobRoutes = (
   server: FastifyInstance,
   store: Store,
-  orchestrator: GenerationOrchestrator
+  orchestrator: GenerationOrchestrator,
+  sessions?: SessionManager
 ) => {
   server.post<{ Body: JobCreateRequest }>("/v1/jobs", async (request, reply) => {
     const payload = request.body;
@@ -22,6 +24,7 @@ export const registerJobRoutes = (
       jobId,
       requestedBy: undefined,
       roomId: payload.roomId,
+      entityId: placeholder.entityId,
       input: {
         prompt: payload.prompt,
         references: payload.references,
@@ -36,6 +39,23 @@ export const registerJobRoutes = (
     };
 
     await store.createJob(job);
+
+    if (payload.roomId && sessions) {
+      sessions.spawnEntity(payload.roomId, {
+        entityId: placeholder.entityId,
+        assetId: placeholder.assetId,
+        ownerId: payload.clientId,
+        transform: payload.spawnTransform ?? {
+          position: { x: 0, y: 1.2, z: 0 },
+          rotation: { x: 0, y: 0, z: 0 },
+          scale: {
+            x: placeholder.scaleMeters[0],
+            y: placeholder.scaleMeters[1],
+            z: placeholder.scaleMeters[2]
+          }
+        }
+      });
+    }
 
     orchestrator
       .runJob(job, { assetType: payload.assetType, generationPlan: payload.generationPlan })

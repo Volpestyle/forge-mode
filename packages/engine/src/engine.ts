@@ -75,7 +75,13 @@ export class Engine {
     this.camera.updateProjectionMatrix();
   }
 
-  spawnBox(options: { position: THREE.Vector3; size?: THREE.Vector3; color?: number }) {
+  spawnBox(options: {
+    position: THREE.Vector3;
+    size?: THREE.Vector3;
+    color?: number;
+    entityId?: string;
+    assetId?: string;
+  }) {
     const size = options.size ?? new THREE.Vector3(1, 1, 1);
     const geometry = new THREE.BoxGeometry(size.x, size.y, size.z);
     const material = new THREE.MeshStandardMaterial({
@@ -103,7 +109,8 @@ export class Engine {
     this.physics.addBody(body);
 
     const entity: Entity = {
-      id: `ent_${Math.random().toString(36).slice(2, 8)}`,
+      id: options.entityId ?? `ent_${Math.random().toString(36).slice(2, 8)}`,
+      assetId: options.assetId,
       object: mesh,
       body,
       baseHalfSize: size.clone().multiplyScalar(0.5),

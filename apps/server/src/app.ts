@@ -10,13 +10,16 @@ import { RealtimeHub } from "./realtime";
 import { registerJobRoutes } from "./routes/jobs";
 import { registerAssetRoutes } from "./routes/assets";
 import { createStorage } from "./storage";
+import { SessionManager } from "./multiplayer/sessionManager";
+import { registerSessionRoutes } from "./multiplayer/sessionServer";
 
 export const buildApp = () => {
   const server = Fastify({ logger: true });
   const realtime = new RealtimeHub();
   const store = new MemoryStore();
   const storage = createStorage(config.publicBaseUrl);
-  const orchestrator = new GenerationOrchestrator(store, realtime, storage);
+  const sessions = new SessionManager();
+  const orchestrator = new GenerationOrchestrator(store, realtime, storage, sessions);
 
   server.register(cors, { origin: true });
   server.register(websocket);
@@ -28,10 +31,11 @@ export const buildApp = () => {
   server.get(config.wsPath, { websocket: true }, (connection) => {
     realtime.addClient(connection.socket);
   });
+  registerSessionRoutes(server, sessions);
 
   server.get("/health", async () => ({ ok: true }));
 
-  registerJobRoutes(server, store, orchestrator);
+  registerJobRoutes(server, store, orchestrator, sessions);
   registerAssetRoutes(server, store);
 
   return server;

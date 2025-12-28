@@ -12,11 +12,19 @@ import {
   View
 } from "react-native";
 import * as THREE from "three";
-import { createDefaultEngine, createEmptyInput, Engine, EngineMode, Entity } from "@forge/engine";
+import {
+  createDefaultEngine,
+  createEmptyInput,
+  createProceduralMesh,
+  Engine,
+  EngineMode,
+  Entity
+} from "@forge/engine";
 import { ApiClient } from "./src/services/apiClient";
 import { LocalLibrary } from "./src/services/library";
-import { Prefab } from "@forge/shared";
+import { EntityState, Prefab, Recipe, SessionServerMessage } from "@forge/shared";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { SessionClient } from "./src/services/sessionClient";
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const findFirstMesh = (object: THREE.Object3D): THREE.Mesh | null => {
@@ -45,6 +53,14 @@ export default function App() {
   const apiRef = useRef(new ApiClient(apiBase));
   const textureLoaderRef = useRef(new THREE.TextureLoader());
   const gltfLoaderRef = useRef(new GLTFLoader());
+  const roomId = "room_default";
+  const sessionClientRef = useRef(new SessionClient(apiBase));
+  const sessionClientIdRef = useRef<string | null>(null);
+  const playerEntityIdRef = useRef<string | null>(null);
+  const networkEntitiesRef = useRef(new Map<string, Entity>());
+  const ownedEntitiesRef = useRef(new Set<string>());
+  const lastSentTransformsRef = useRef(new Map<string, THREE.Vector3>());
+  const lastNetworkSyncRef = useRef(0);
 
   const [mode, setMode] = useState<EngineMode>("fly");
   const [prompt, setPrompt] = useState("");
@@ -60,6 +76,117 @@ export default function App() {
   const verticalRef = useRef(0);
   const sprintRef = useRef(false);
   const rightDeltaRef = useRef({ dx: 0, dy: 0 });
+
+  const playerRecipe: Recipe = {
+    kind: "character",
+    name: "Player",
+    scaleMeters: [0.8, 1.8, 0.8],
+    style: "simple proxy",
+    materials: [{ type: "cloth", roughness: 0.9, color: "#5c7c99" }],
+    physics: { body: "dynamic", massKg: 90, collider: "box", friction: 4, restitution: 0.1 },
+    interaction: { pickup: false, pushable: false },
+    generationPlan: { meshStrategy: "procedural", textureStrategy: "flat", lods: false }
+  };
+
+  const applyAssetToEntity = async (entity: Entity, assetId: string) => {
+    const asset = await apiRef.current.getAsset(assetId);
+    entity.assetId = asset.assetId;
+    entity.recipe = asset.generationRecipe;
+    const { mesh } = createProceduralMesh(asset.generationRecipe);
+    engineRef.current?.replaceEntityObject(entity, mesh, { preserveSize: true });
+
+    if (asset.files?.textures?.length) {
+      const albedo = asset.files.textures.find((entry) => entry.type === "albedo");
+      if (albedo) {
+        textureLoaderRef.current.load(albedo.url, (texture) => {
+          texture.colorSpace = THREE.SRGBColorSpace;
+          const target = findFirstMesh(entity.object);
+          if (!target) {
+            return;
+          }
+          const material = target.material as THREE.MeshStandardMaterial;
+          material.map = texture;
+          material.color.set(0xffffff);
+          material.needsUpdate = true;
+        });
+      }
+    }
+
+    if (asset.files?.glbUrl) {
+      gltfLoaderRef.current.load(asset.files.glbUrl, (gltf) => {
+        engineRef.current?.replaceEntityObject(entity, gltf.scene, { preserveSize: true });
+      });
+    }
+  };
+
+  const spawnEntityFromState = async (state: EntityState) => {
+    const engine = engineRef.current;
+    if (!engine) {
+      return;
+    }
+    const position = new THREE.Vector3(
+      state.transform.position.x,
+      state.transform.position.y,
+      state.transform.position.z
+    );
+    const rotation = new THREE.Euler(
+      state.transform.rotation.x,
+      state.transform.rotation.y,
+      state.transform.rotation.z
+    );
+    const scale = new THREE.Vector3(
+      state.transform.scale.x,
+      state.transform.scale.y,
+      state.transform.scale.z
+    );
+
+    let entity: Entity;
+    if (state.assetId === "player_proxy") {
+      const recipe = { ...playerRecipe, scaleMeters: [scale.x, scale.y, scale.z] };
+      entity = engine.spawnProceduralAsset({
+        recipe,
+        position,
+        assetId: state.assetId,
+        entityId: state.entityId
+      });
+    } else if (state.assetId.startsWith("asset_")) {
+      entity = engine.spawnBox({
+        position,
+        size: scale,
+        color: 0x5b6b72,
+        entityId: state.entityId,
+        assetId: state.assetId
+      });
+      await applyAssetToEntity(entity, state.assetId);
+    } else {
+      entity = engine.spawnBox({
+        position,
+        size: scale,
+        color: 0x5b6b72,
+        entityId: state.entityId,
+        assetId: state.assetId
+      });
+    }
+
+    entity.object.rotation.copy(rotation);
+    networkEntitiesRef.current.set(state.entityId, entity);
+  };
+
+  const updateEntityFromState = async (state: EntityState) => {
+    const entity = networkEntitiesRef.current.get(state.entityId);
+    if (!entity) {
+      await spawnEntityFromState(state);
+      return;
+    }
+    if (state.assetId !== entity.assetId && state.assetId.startsWith("asset_")) {
+      await applyAssetToEntity(entity, state.assetId);
+    }
+    engineRef.current?.applyEntityTransform(entity, {
+      position: state.transform.position,
+      rotation: state.transform.rotation,
+      scale: state.transform.scale
+    });
+  };
 
   useEffect(() => {
     const loadPrefabs = async () => {
@@ -90,31 +217,18 @@ export default function App() {
           return;
         }
         const asset = await apiRef.current.getAsset(event.assetId);
-        const position = job.entity?.object.position.clone() ?? new THREE.Vector3(0, 2, 0);
-        if (job.entity) {
-          engineRef.current.removeEntity(job.entity);
+        let entity = job.entity;
+        if (!entity) {
+          entity = engineRef.current.spawnBox({
+            position: new THREE.Vector3(0, 2, 0),
+            size: new THREE.Vector3(1, 1, 1),
+            color: 0x6b7882,
+            entityId: event.entityId,
+            assetId: asset.assetId
+          });
+          networkEntitiesRef.current.set(entity.id, entity);
         }
-        const entity = engineRef.current.spawnProceduralAsset({
-          recipe: asset.generationRecipe,
-          position,
-          assetId: asset.assetId
-        });
-        if (asset.files?.textures?.length) {
-          const albedo = asset.files.textures.find((entry) => entry.type === "albedo");
-          if (albedo) {
-            textureLoaderRef.current.load(albedo.url, (texture) => {
-              texture.colorSpace = THREE.SRGBColorSpace;
-              const target = findFirstMesh(entity.object);
-              if (!target) {
-                return;
-              }
-              const material = target.material as THREE.MeshStandardMaterial;
-              material.map = texture;
-              material.color.set(0xffffff);
-              material.needsUpdate = true;
-            });
-          }
-        }
+        await applyAssetToEntity(entity, asset.assetId);
         jobsRef.current.set(event.jobId, { ...job, entity, status: "ready" });
         setJobs((current) =>
           current.map((entry) =>
@@ -123,34 +237,45 @@ export default function App() {
               : entry
           )
         );
-        if (asset.files?.glbUrl) {
-          gltfLoaderRef.current.load(asset.files.glbUrl, (gltf) => {
-            engineRef.current?.replaceEntityObject(entity, gltf.scene, { preserveSize: true });
-            if (asset.files?.textures?.length) {
-              const albedo = asset.files.textures.find((entry) => entry.type === "albedo");
-              if (albedo) {
-                textureLoaderRef.current.load(albedo.url, (texture) => {
-                  texture.colorSpace = THREE.SRGBColorSpace;
-                  const target = findFirstMesh(entity.object);
-                  if (!target) {
-                    return;
-                  }
-                  const material = target.material as THREE.MeshStandardMaterial;
-                  material.map = texture;
-                  material.color.set(0xffffff);
-                  material.needsUpdate = true;
-                });
-              }
-            }
-          });
-        }
         selectedRef.current = entity;
         setInspectorTick((value) => value + 1);
       }
     });
 
+    sessionClientRef.current.connect(roomId);
+    const unsubscribeSession = sessionClientRef.current.onMessage(async (message: SessionServerMessage) => {
+      if (message.type === "welcome") {
+        sessionClientIdRef.current = message.clientId;
+        playerEntityIdRef.current = `player_${message.clientId}`;
+        for (const entity of message.entities) {
+          await updateEntityFromState(entity);
+        }
+      }
+      if (message.type === "entity_spawned") {
+        await updateEntityFromState(message.entity);
+      }
+      if (message.type === "entity_updated") {
+        const entity = message.entity;
+        if (entity.ownerId === sessionClientIdRef.current && entity.entityId === playerEntityIdRef.current) {
+          if (entity.assetId !== networkEntitiesRef.current.get(entity.entityId)?.assetId) {
+            await updateEntityFromState(entity);
+          }
+          return;
+        }
+        await updateEntityFromState(entity);
+      }
+      if (message.type === "entity_removed") {
+        const existing = networkEntitiesRef.current.get(message.entityId);
+        if (existing) {
+          engineRef.current?.removeEntity(existing);
+          networkEntitiesRef.current.delete(message.entityId);
+        }
+      }
+    });
+
     return () => {
       unsubscribe();
+      unsubscribeSession();
     };
   }, []);
 
@@ -270,14 +395,21 @@ export default function App() {
     setPrompt("");
     let response;
     try {
+      const spawn = getSpawnPosition();
       response = await apiRef.current.createJob({
         prompt: trimmed,
         assetType: "prop",
         draft: true,
+        clientId: sessionClientIdRef.current ?? undefined,
         generationPlan: {
           meshStrategy,
           textureStrategy: "generated_pbr",
           lods: true
+        },
+        spawnTransform: {
+          position: { x: spawn.x, y: spawn.y, z: spawn.z },
+          rotation: { x: 0, y: 0, z: 0 },
+          scale: { x: 1, y: 1, z: 1 }
         }
       });
     } catch (error) {
@@ -288,7 +420,9 @@ export default function App() {
     const placeholder = engineRef.current.spawnBox({
       position: getSpawnPosition(),
       size: new THREE.Vector3(...response.placeholder.scaleMeters),
-      color: 0x6b7882
+      color: 0x6b7882,
+      entityId: response.placeholder.entityId,
+      assetId: response.placeholder.assetId
     });
 
     jobsRef.current.set(response.jobId, {
@@ -301,6 +435,24 @@ export default function App() {
       ...current,
       { jobId: response.jobId, prompt: trimmed, status: response.status }
     ]);
+
+    ownedEntitiesRef.current.add(response.placeholder.entityId);
+    networkEntitiesRef.current.set(response.placeholder.entityId, placeholder);
+    sessionClientRef.current.spawnEntity(roomId, {
+      entityId: response.placeholder.entityId,
+      assetId: response.placeholder.assetId,
+      ownerId: sessionClientIdRef.current ?? undefined,
+      transform: {
+        position: { x: spawn.x, y: spawn.y, z: spawn.z },
+        rotation: { x: 0, y: 0, z: 0 },
+        scale: { x: 1, y: 1, z: 1 }
+      },
+      physics: {
+        mass: placeholder.body.mass,
+        friction: placeholder.body.friction,
+        restitution: placeholder.body.restitution
+      }
+    });
   };
 
   const handleSavePrefab = async () => {
@@ -368,6 +520,63 @@ export default function App() {
       engine.update(dt, snapshot);
       renderer.render(engine.scene, engine.camera);
       gl.endFrameEXP();
+
+      const now = Date.now();
+      if (
+        sessionClientIdRef.current &&
+        playerEntityIdRef.current &&
+        now - lastNetworkSyncRef.current > 120
+      ) {
+        lastNetworkSyncRef.current = now;
+        sessionClientRef.current.updateEntity(roomId, playerEntityIdRef.current, {
+          transform: {
+            position: {
+              x: engine.camera.position.x,
+              y: engine.camera.position.y,
+              z: engine.camera.position.z
+            },
+            rotation: {
+              x: engine.camera.rotation.x,
+              y: engine.camera.rotation.y,
+              z: engine.camera.rotation.z
+            },
+            scale: { x: 1, y: 1, z: 1 }
+          }
+        });
+
+        for (const entityId of ownedEntitiesRef.current) {
+          const entity = networkEntitiesRef.current.get(entityId);
+          if (!entity) {
+            continue;
+          }
+          const lastSent = lastSentTransformsRef.current.get(entityId);
+          const current = entity.object.position.clone();
+          if (!lastSent || lastSent.distanceTo(current) > 0.05) {
+            lastSentTransformsRef.current.set(entityId, current.clone());
+            sessionClientRef.current.updateEntity(roomId, entityId, {
+              transform: {
+                position: { x: current.x, y: current.y, z: current.z },
+                rotation: {
+                  x: entity.object.rotation.x,
+                  y: entity.object.rotation.y,
+                  z: entity.object.rotation.z
+                },
+                scale: {
+                  x: entity.object.scale.x,
+                  y: entity.object.scale.y,
+                  z: entity.object.scale.z
+                }
+              },
+              physics: {
+                mass: entity.body.mass,
+                friction: entity.body.friction,
+                restitution: entity.body.restitution
+              }
+            });
+          }
+        }
+      }
+
       requestAnimationFrame(renderLoop);
     };
 

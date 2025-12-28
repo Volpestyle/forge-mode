@@ -27,6 +27,12 @@ Monorepo for the Prompt-to-World sandbox. MVP1 adds prompt-to-recipe jobs and a 
 - GLB storage via local object store (served from `/storage`)
 - Client-side GLB streaming + replacement
 
+## MVP4 features
+
+- WebSocket session server (`/session`) with rooms + entity replication
+- Server-coordinated assetId swaps on job completion
+- Basic player presence syncing
+
 ## Local setup
 
 ```bash
@@ -65,6 +71,7 @@ Controls (web):
 - Fly: RMB drag to look
 - FPS: click to lock pointer
 - LMB pick/throw, Sculpt: LMB raise, RMB lower
+- Multiplayer room: add `?room=room_123` to the URL
 
 ## Run mobile (Expo)
 

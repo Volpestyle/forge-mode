@@ -3,6 +3,7 @@ import { AssetDefinition, GenerationJob, Recipe } from "@forge/shared";
 import { Store } from "../store/store";
 import { Storage } from "../storage/storage";
 import { RealtimeHub } from "../realtime";
+import { SessionManager } from "../multiplayer/sessionManager";
 import { generateRecipe } from "./llmhubClient";
 import { createMockRecipe } from "./mockRecipe";
 import { generateTextures } from "./textureGenerator";
@@ -10,7 +11,12 @@ import { generateMesh } from "./meshGenerator";
 import { postprocessMesh } from "./postprocess";
 
 export class GenerationOrchestrator {
-  constructor(private store: Store, private realtime: RealtimeHub, private storage: Storage) {}
+  constructor(
+    private store: Store,
+    private realtime: RealtimeHub,
+    private storage: Storage,
+    private sessions?: SessionManager
+  ) {}
 
   async runJob(
     job: GenerationJob,
@@ -97,6 +103,10 @@ export class GenerationOrchestrator {
     job.status = "ready";
     job.resultAssetId = assetId;
     await this.store.updateJob(job);
+
+    if (job.roomId && job.entityId && this.sessions) {
+      this.sessions.updateEntityAsset(job.roomId, job.entityId, assetId);
+    }
 
     this.realtime.broadcast({
       type: "asset_ready",
