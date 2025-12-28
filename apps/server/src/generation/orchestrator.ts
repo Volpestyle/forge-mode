@@ -4,6 +4,7 @@ import { Store } from "../store/store";
 import { RealtimeHub } from "../realtime";
 import { generateRecipe } from "./llmhubClient";
 import { createMockRecipe } from "./mockRecipe";
+import { generateTextures } from "./textureGenerator";
 
 export class GenerationOrchestrator {
   constructor(private store: Store, private realtime: RealtimeHub) {}
@@ -33,8 +34,10 @@ export class GenerationOrchestrator {
       jobId: job.jobId,
       status: "postprocess",
       progress: 0.7,
-      detail: "procedural_spawn"
+      detail: "texture_generation"
     });
+
+    const textures = await generateTextures(recipe);
 
     const assetId = `asset_${nanoid(8)}`;
     const asset: AssetDefinition = {
@@ -42,6 +45,15 @@ export class GenerationOrchestrator {
       displayName: recipe.name,
       prompt: job.input.prompt,
       generationRecipe: recipe,
+      files: {
+        textures: [
+          {
+            type: "albedo",
+            url: textures.albedoUrl
+          }
+        ],
+        thumbnailUrl: textures.thumbnailUrl
+      },
       tags: [recipe.kind]
     };
 

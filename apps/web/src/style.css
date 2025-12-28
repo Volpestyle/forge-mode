@@ -141,6 +141,22 @@ canvas {
   cursor: pointer;
 }
 
+.queue-thumb {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.queue-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
 .queue-prompt {
   flex: 1;
   overflow: hidden;

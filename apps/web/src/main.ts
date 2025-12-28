@@ -50,6 +50,7 @@ renderer.setSize(viewport.width, viewport.height);
 const engine = createDefaultEngine(viewport);
 const input = new WebInput(canvas);
 const library = new LocalLibrary();
+const textureLoader = new THREE.TextureLoader();
 
 const apiBase = (import.meta as { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE ??
   "http://localhost:8080";
@@ -64,7 +65,7 @@ let selected: Entity | null = null;
 
 const jobs = new Map<
   string,
-  { status: string; entity: Entity | null; assetId?: string; prompt: string }
+  { status: string; entity: Entity | null; assetId?: string; prompt: string; thumbnailUrl?: string }
 >();
 
 const updateHud = () => {
@@ -118,6 +119,20 @@ const getSpawnPosition = () => {
   engine.camera.getWorldDirection(forward);
   forward.normalize();
   return engine.camera.position.clone().addScaledVector(forward, 6);
+};
+
+const applyTextures = (entity: Entity, textures?: Array<{ type: string; url: string }>) => {
+  const albedo = textures?.find((entry) => entry.type === "albedo");
+  if (!albedo) {
+    return;
+  }
+  textureLoader.load(albedo.url, (texture) => {
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const material = entity.mesh.material as THREE.MeshStandardMaterial;
+    material.map = texture;
+    material.color.set(0xffffff);
+    material.needsUpdate = true;
+  });
 };
 
 const renderPromptPanel = () => {
@@ -183,7 +198,7 @@ const renderQueuePanel = () => {
   for (const [jobId, job] of jobs.entries()) {
     const row = document.createElement("div");
     row.className = "queue-row";
-    row.innerHTML = `<div class="queue-prompt">${job.prompt}</div><div class="queue-status">${job.status}</div>`;
+    row.innerHTML = `\n      <div class=\"queue-thumb\">${job.thumbnailUrl ? `<img src=\"${job.thumbnailUrl}\" />` : \"\"}</div>\n      <div class=\"queue-prompt\">${job.prompt}</div>\n      <div class=\"queue-status\">${job.status}</div>\n    `;
     row.addEventListener("click", () => {
       if (job.entity) {
         selected = job.entity;
@@ -358,7 +373,14 @@ api.onEvent(async (event) => {
       position,
       assetId: asset.assetId
     });
-    jobs.set(event.jobId, { ...job, status: "ready", entity, assetId: asset.assetId });
+    applyTextures(entity, asset.files?.textures);
+    jobs.set(event.jobId, {
+      ...job,
+      status: "ready",
+      entity,
+      assetId: asset.assetId,
+      thumbnailUrl: asset.files?.thumbnailUrl
+    });
     selected = entity;
     renderQueuePanel();
     renderInspectorPanel();

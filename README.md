@@ -16,6 +16,11 @@ Monorepo for the Prompt-to-World sandbox. MVP1 adds prompt-to-recipe jobs and a 
 - Generation job queue + realtime events (WebSocket)
 - Inspector edits and local prefab library
 
+## MVP2 features
+
+- Texture + thumbnail generation (LLMHub image or SVG fallback)
+- Automatic texture application to procedural meshes
+
 ## Local setup
 
 ```bash
@@ -34,6 +39,8 @@ Environment (optional):
 - `LLMHUB_API_KEY`
 - `LLMHUB_INTENT_MODEL`
 - `LLMHUB_INTENT_PATH`
+- `LLMHUB_IMAGE_MODEL`
+- `LLMHUB_IMAGE_PATH`
 
 ## Run web
 

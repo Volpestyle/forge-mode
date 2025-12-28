@@ -49,7 +49,7 @@ export type AssetDefinition = {
   providerTrace?: Record<string, unknown>;
   files?: {
     glbUrl?: string;
-    textures?: string[];
+    textures?: Array<{ type: "albedo" | "normal" | "roughness" | "metallic"; url: string }>;
     thumbnailUrl?: string;
   };
   defaultParams?: Record<string, unknown>;

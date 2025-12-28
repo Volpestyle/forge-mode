@@ -8,6 +8,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  Image,
   View
 } from "react-native";
 import * as THREE from "three";
@@ -29,10 +30,13 @@ export default function App() {
   const libraryRef = useRef(new LocalLibrary());
   const apiBase = (process.env.EXPO_PUBLIC_API_BASE as string | undefined) ?? "http://localhost:8080";
   const apiRef = useRef(new ApiClient(apiBase));
+  const textureLoaderRef = useRef(new THREE.TextureLoader());
 
   const [mode, setMode] = useState<EngineMode>("fly");
   const [prompt, setPrompt] = useState("");
-  const [jobs, setJobs] = useState<Array<{ jobId: string; prompt: string; status: string }>>([]);
+  const [jobs, setJobs] = useState<
+    Array<{ jobId: string; prompt: string; status: string; thumbnailUrl?: string }>
+  >([]);
   const [prefabs, setPrefabs] = useState<Prefab[]>([]);
   const [inspectorTick, setInspectorTick] = useState(0);
 
@@ -78,10 +82,24 @@ export default function App() {
           position,
           assetId: asset.assetId
         });
+        if (asset.files?.textures?.length) {
+          const albedo = asset.files.textures.find((entry) => entry.type === "albedo");
+          if (albedo) {
+            textureLoaderRef.current.load(albedo.url, (texture) => {
+              texture.colorSpace = THREE.SRGBColorSpace;
+              const material = entity.mesh.material as THREE.MeshStandardMaterial;
+              material.map = texture;
+              material.color.set(0xffffff);
+              material.needsUpdate = true;
+            });
+          }
+        }
         jobsRef.current.set(event.jobId, { ...job, entity, status: "ready" });
         setJobs((current) =>
           current.map((entry) =>
-            entry.jobId === event.jobId ? { ...entry, status: "ready" } : entry
+            entry.jobId === event.jobId
+              ? { ...entry, status: "ready", thumbnailUrl: asset.files?.thumbnailUrl }
+              : entry
           )
         );
         selectedRef.current = entity;
@@ -354,6 +372,11 @@ export default function App() {
         <Text style={styles.panelTitle}>Queue</Text>
         {jobs.map((job) => (
           <View key={job.jobId} style={styles.queueRow}>
+            {job.thumbnailUrl ? (
+              <Image source={{ uri: job.thumbnailUrl }} style={styles.queueThumb} />
+            ) : (
+              <View style={styles.queueThumb} />
+            )}
             <Text style={styles.queuePrompt} numberOfLines={1}>
               {job.prompt}
             </Text>
@@ -589,6 +612,13 @@ const styles = StyleSheet.create({
     padding: 6,
     borderRadius: 8,
     marginBottom: 6
+  },
+  queueThumb: {
+    width: 28,
+    height: 28,
+    borderRadius: 6,
+    backgroundColor: "rgba(255, 255, 255, 0.12)",
+    marginRight: 6
   },
   queuePrompt: {
     color: "#f0f4f7",

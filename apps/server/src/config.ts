@@ -13,7 +13,9 @@ export const config = {
     baseUrl: process.env.LLMHUB_BASE_URL ?? "",
     apiKey: process.env.LLMHUB_API_KEY ?? "",
     intentModel: process.env.LLMHUB_INTENT_MODEL ?? "text-best",
-    intentPath: process.env.LLMHUB_INTENT_PATH ?? "/v1/generate"
+    intentPath: process.env.LLMHUB_INTENT_PATH ?? "/v1/generate",
+    imageModel: process.env.LLMHUB_IMAGE_MODEL ?? "image-fast",
+    imagePath: process.env.LLMHUB_IMAGE_PATH ?? "/v1/image"
   },
   storeDriver: process.env.STORE_DRIVER ?? "memory"
 };
