@@ -33,6 +33,11 @@ Monorepo for the Prompt-to-World sandbox. MVP1 adds prompt-to-recipe jobs and a 
 - Server-coordinated assetId swaps on job completion
 - Basic player presence syncing
 
+## MVP5 features
+
+- Mobile parity for multiplayer + asset streaming
+- Expo GL render path with shared engine core
+
 ## Local setup
 
 ```bash
@@ -86,3 +91,4 @@ Controls (mobile):
 - Buttons: Up/Down/Sprint and Lower (for sculpt)
 
 Set `EXPO_PUBLIC_API_BASE` to point at the server (default: `http://localhost:8080`).
+Set `EXPO_PUBLIC_ROOM_ID` to join a specific room (default: `room_default`).

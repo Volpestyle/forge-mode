@@ -53,7 +53,7 @@ export default function App() {
   const apiRef = useRef(new ApiClient(apiBase));
   const textureLoaderRef = useRef(new THREE.TextureLoader());
   const gltfLoaderRef = useRef(new GLTFLoader());
-  const roomId = "room_default";
+  const roomId = (process.env.EXPO_PUBLIC_ROOM_ID as string | undefined) ?? "room_default";
   const sessionClientRef = useRef(new SessionClient(apiBase));
   const sessionClientIdRef = useRef<string | null>(null);
   const playerEntityIdRef = useRef<string | null>(null);
@@ -115,6 +115,22 @@ export default function App() {
     if (asset.files?.glbUrl) {
       gltfLoaderRef.current.load(asset.files.glbUrl, (gltf) => {
         engineRef.current?.replaceEntityObject(entity, gltf.scene, { preserveSize: true });
+        if (asset.files?.textures?.length) {
+          const albedo = asset.files.textures.find((entry) => entry.type === "albedo");
+          if (albedo) {
+            textureLoaderRef.current.load(albedo.url, (texture) => {
+              texture.colorSpace = THREE.SRGBColorSpace;
+              const target = findFirstMesh(entity.object);
+              if (!target) {
+                return;
+              }
+              const material = target.material as THREE.MeshStandardMaterial;
+              material.map = texture;
+              material.color.set(0xffffff);
+              material.needsUpdate = true;
+            });
+          }
+        }
       });
     }
   };
