@@ -185,6 +185,8 @@ export default function App() {
     }
 
     entity.object.rotation.copy(rotation);
+    entity.body.rotation.copy(rotation);
+    entity.body.angularVelocity.set(0, 0, 0);
     networkEntitiesRef.current.set(state.entityId, entity);
   };
 

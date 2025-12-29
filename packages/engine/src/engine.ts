@@ -48,7 +48,7 @@ export class Engine {
       options.camera ?? new THREE.PerspectiveCamera(70, viewport.width / viewport.height, 0.1, 200);
     this.terrain =
       options.terrain ?? new Terrain({ width: 60, depth: 60, segmentsX: 80, segmentsZ: 80 });
-    this.physics = new SimplePhysicsWorld();
+    this.physics = new SimplePhysicsWorld(this.terrain);
     this.mode = options.mode ?? "fly";
     this.config = { ...defaultEngineConfig, ...options.config };
 
@@ -92,21 +92,22 @@ export class Engine {
     const mesh = new THREE.Mesh(geometry, material);
     mesh.castShadow = true;
 
-    const body: SimpleRigidBody = {
+    const body = this.physics.createBody({
       position: options.position.clone(),
-      velocity: new THREE.Vector3(),
+      rotation: mesh.rotation.clone(),
       size: size.clone().multiplyScalar(0.5),
       dynamic: true,
+      bodyType: "dynamic",
       mass: 1,
       restitution: 0.2,
       friction: 4,
-      grounded: false,
-      sleeping: false
-    };
+      angularDamping: 0.8,
+      collider: "box",
+      mesh
+    });
 
     mesh.position.copy(body.position);
     this.scene.add(mesh);
-    this.physics.addBody(body);
 
     const entity: Entity = {
       id: options.entityId ?? `ent_${Math.random().toString(36).slice(2, 8)}`,
@@ -129,21 +130,23 @@ export class Engine {
     entityId?: string;
   }) {
     const { mesh, baseHalfSize } = createProceduralMesh(options.recipe);
-    const body: SimpleRigidBody = {
+    const bodyType = options.recipe.physics?.body ?? "dynamic";
+    const body = this.physics.createBody({
       position: options.position.clone(),
-      velocity: new THREE.Vector3(),
+      rotation: mesh.rotation.clone(),
       size: baseHalfSize.clone(),
-      dynamic: options.recipe.physics?.body !== "static",
+      dynamic: bodyType !== "static",
+      bodyType,
       mass: options.recipe.physics?.massKg ?? 1,
       restitution: options.recipe.physics?.restitution ?? 0.2,
       friction: options.recipe.physics?.friction ?? 4,
-      grounded: false,
-      sleeping: false
-    };
+      angularDamping: 0.8,
+      collider: options.recipe.physics?.collider ?? "box",
+      mesh
+    });
 
     mesh.position.copy(body.position);
     this.scene.add(mesh);
-    this.physics.addBody(body);
 
     const entity: Entity = {
       id: options.entityId ?? `ent_${Math.random().toString(36).slice(2, 8)}`,
@@ -174,13 +177,14 @@ export class Engine {
       this.handlePickupAndThrow(input);
     }
 
-    this.physics.step(dt, this.terrain);
+    this.physics.step(dt);
 
     for (const entity of this.entities) {
       if (this.heldEntity === entity) {
         continue;
       }
       entity.object.position.copy(entity.body.position);
+      entity.object.rotation.copy(entity.body.rotation);
     }
   }
 
@@ -221,11 +225,18 @@ export class Engine {
     }
     this.tagEntityObject(entity.object, entity.id);
     this.updateBaseHalfSize(entity);
+    if (entity.recipe?.physics?.collider) {
+      entity.body.collider = entity.recipe.physics.collider;
+    }
+    entity.body.size.copy(entity.baseHalfSize);
+    this.physics.updateBodyCollider(entity.body, entity.object);
+    entity.body.rotation.copy(entity.object.rotation);
+    entity.body.angularVelocity.set(0, 0, 0);
     this.scene.add(entity.object);
   }
 
   private tagEntityObject(object: THREE.Object3D, entityId: string) {
-    object.traverse((child) => {
+    object.traverse((child: THREE.Object3D) => {
       child.userData.entityId = entityId;
       if (child instanceof THREE.Mesh) {
         child.castShadow = true;
@@ -284,12 +295,15 @@ export class Engine {
     }
     if (transform.rotation) {
       entity.object.rotation.set(transform.rotation.x, transform.rotation.y, transform.rotation.z);
+      entity.body.rotation.set(transform.rotation.x, transform.rotation.y, transform.rotation.z);
+      entity.body.angularVelocity.set(0, 0, 0);
     }
     if (transform.scale) {
       entity.object.scale.set(transform.scale.x, transform.scale.y, transform.scale.z);
       entity.body.size
         .copy(entity.baseHalfSize)
         .multiply(new THREE.Vector3(transform.scale.x, transform.scale.y, transform.scale.z));
+      this.physics.updateBodyCollider(entity.body, entity.object);
     }
     entity.body.sleeping = false;
   }
@@ -317,6 +331,7 @@ export class Engine {
       if (picked) {
         this.heldEntity = picked;
         picked.body.velocity.set(0, 0, 0);
+        picked.body.angularVelocity.set(0, 0, 0);
         picked.body.sleeping = true;
       }
     }
@@ -332,6 +347,7 @@ export class Engine {
       this.heldEntity.body.position.copy(holdPoint);
       this.heldEntity.object.position.copy(holdPoint);
       this.heldEntity.body.velocity.set(0, 0, 0);
+      this.heldEntity.body.angularVelocity.set(0, 0, 0);
     }
 
     if (input.pointer.primaryReleased && this.heldEntity && !pressedThisFrame) {
@@ -358,6 +374,7 @@ export class Engine {
     const direction = pointer.primaryDown ? 1 : -1;
     const delta = direction * this.config.brushStrength * dt;
     this.terrain.applyBrush(hit.x, hit.z, delta, this.config.brushRadius);
+    this.physics.updateTerrain(this.terrain);
   }
 
   private pickEntity(input: InputSnapshot) {

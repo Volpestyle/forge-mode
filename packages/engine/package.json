@@ -14,11 +14,16 @@
   },
   "files": ["dist"],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "dev": "tsc -p tsconfig.build.json -w"
+    "build": "tsc -b tsconfig.build.json",
+    "dev": "tsc -b tsconfig.build.json -w"
+  },
+  "devDependencies": {
+    "@types/three": "^0.182.0",
+    "typescript": "^5.6.2"
   },
   "dependencies": {
     "@forge/shared": "workspace:*",
+    "cannon-es": "^0.20.0",
     "three": "0.182.0"
   }
 }

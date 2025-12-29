@@ -428,6 +428,8 @@ const spawnEntityFromState = async (state: EntityState) => {
   }
 
   entity.object.rotation.copy(rotation);
+  entity.body.rotation.copy(rotation);
+  entity.body.angularVelocity.set(0, 0, 0);
   networkEntities.set(state.entityId, entity);
 };
 
