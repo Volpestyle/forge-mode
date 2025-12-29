@@ -3,6 +3,8 @@ import { InputSnapshot } from "./types";
 export const createEmptyInput = (): InputSnapshot => ({
   move: { x: 0, y: 0, z: 0 },
   look: { x: 0, y: 0 },
+  pan: { x: 0, y: 0 },
+  zoom: 0,
   sprint: false,
   pointer: {
     x: 0,

@@ -310,6 +310,8 @@ export default function App() {
     const snapshot = {
       move: { ...input.move },
       look: { ...input.look },
+      pan: { ...input.pan },
+      zoom: input.zoom,
       sprint: input.sprint,
       pointer: {
         ...input.pointer,
@@ -320,6 +322,9 @@ export default function App() {
 
     input.look.x = 0;
     input.look.y = 0;
+    input.pan.x = 0;
+    input.pan.y = 0;
+    input.zoom = 0;
     input.pointer.primaryPressed = false;
     input.pointer.primaryReleased = false;
     input.pointer.secondaryPressed = false;

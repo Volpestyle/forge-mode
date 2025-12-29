@@ -18,6 +18,8 @@ export type PointerSnapshot = {
 export type InputSnapshot = {
   move: Vec3;
   look: { x: number; y: number };
+  pan: { x: number; y: number };
+  zoom: number;
   sprint: boolean;
   pointer: PointerSnapshot;
 };

@@ -55,6 +55,14 @@ const input = new WebInput(canvas);
 const library = new LocalLibrary();
 const textureLoader = new THREE.TextureLoader();
 const gltfLoader = new GLTFLoader();
+const dragRaycaster = new THREE.Raycaster();
+const dragPlane = new THREE.Plane();
+const dragPlaneNormal = new THREE.Vector3();
+const dragPlanePoint = new THREE.Vector3();
+const dragTarget = new THREE.Vector3();
+const selectionHelper = new THREE.BoxHelper(new THREE.Object3D(), 0xffc857);
+selectionHelper.visible = false;
+engine.scene.add(selectionHelper);
 
 const apiBase = (import.meta as { env?: { VITE_API_BASE?: string } }).env?.VITE_API_BASE ??
   "http://localhost:8080";
@@ -76,6 +84,20 @@ engine.setMode(mode);
 input.setPointerLockEnabled(mode === "fps");
 
 let selected: Entity | null = null;
+let axisLock: "x" | "y" | "z" | null = null;
+let dragging:
+  | {
+      entity: Entity;
+      grabOffset: THREE.Vector3;
+      distance: number;
+      axisLock: "x" | "y" | "z" | null;
+      anchor: THREE.Vector3;
+      lastTarget: THREE.Vector3;
+      dragVelocity: THREE.Vector3;
+      springStrength: number;
+      springDamping: number;
+    }
+  | null = null;
 let meshStrategy: "procedural" | "text_to_3d" | "image_to_3d" = "procedural";
 
 const jobs = new Map<
@@ -89,8 +111,9 @@ const updateHud = () => {
     <div class="row"><span class="label">Mode</span> ${mode.toUpperCase()}</div>
     <div class="row">1 Fly · 2 FPS · 3 Sculpt</div>
     <div class="row">WASD move · Space/C up/down · Shift sprint</div>
-    <div class="row">Fly: RMB drag to look · FPS: click to lock</div>
-    <div class="row">LMB select · FPS: LMB pick/throw</div>
+    <div class="row">Fly: LMB drag look · Trackpad pinch zoom · Two-finger pan</div>
+    <div class="row">Select: LMB drag to throw · Hold X/Y/Z to lock axis</div>
+    <div class="row">FPS: click to lock · LMB pick/throw</div>
   `;
 };
 updateHud();
@@ -103,6 +126,9 @@ const setMode = (nextMode: EngineMode) => {
 };
 
 window.addEventListener("keydown", (event) => {
+  if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+    return;
+  }
   if (event.code === "Digit1") {
     setMode("fly");
   }
@@ -111,6 +137,30 @@ window.addEventListener("keydown", (event) => {
   }
   if (event.code === "Digit3") {
     setMode("sculpt");
+  }
+  if (event.code === "KeyX") {
+    axisLock = "x";
+  }
+  if (event.code === "KeyY") {
+    axisLock = "y";
+  }
+  if (event.code === "KeyZ") {
+    axisLock = "z";
+  }
+});
+
+window.addEventListener("keyup", (event) => {
+  if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+    return;
+  }
+  if (event.code === "KeyX" && axisLock === "x") {
+    axisLock = null;
+  }
+  if (event.code === "KeyY" && axisLock === "y") {
+    axisLock = null;
+  }
+  if (event.code === "KeyZ" && axisLock === "z") {
+    axisLock = null;
   }
 });
 
@@ -134,6 +184,162 @@ const getSpawnPosition = () => {
   engine.camera.getWorldDirection(forward);
   forward.normalize();
   return engine.camera.position.clone().addScaledVector(forward, 6);
+};
+
+const findEntityFromObject = (object: THREE.Object3D) => {
+  let current: THREE.Object3D | null = object;
+  while (current) {
+    const entityId = current.userData.entityId as string | undefined;
+    if (entityId) {
+      return engine.getEntityById(entityId);
+    }
+    current = current.parent;
+  }
+  return null;
+};
+
+const pickEntityHit = (pointer: { x: number; y: number; width: number; height: number }) => {
+  if (pointer.width <= 0 || pointer.height <= 0) {
+    return null;
+  }
+  const ndc = new THREE.Vector2(
+    (pointer.x / pointer.width) * 2 - 1,
+    -(pointer.y / pointer.height) * 2 + 1
+  );
+  dragRaycaster.setFromCamera(ndc, engine.camera);
+  const objects = engine.entities.map((entity) => entity.object);
+  const hits = dragRaycaster.intersectObjects(objects, true);
+  if (hits.length === 0) {
+    return null;
+  }
+  const entity = findEntityFromObject(hits[0].object);
+  if (!entity) {
+    return null;
+  }
+  return { entity, point: hits[0].point, distance: hits[0].distance };
+};
+
+const getPointerPlaneHit = (
+  pointer: { x: number; y: number; width: number; height: number },
+  distance: number
+) => {
+  if (pointer.width <= 0 || pointer.height <= 0) {
+    return null;
+  }
+  const ndc = new THREE.Vector2(
+    (pointer.x / pointer.width) * 2 - 1,
+    -(pointer.y / pointer.height) * 2 + 1
+  );
+  dragRaycaster.setFromCamera(ndc, engine.camera);
+  engine.camera.getWorldDirection(dragPlaneNormal);
+  dragPlanePoint.copy(engine.camera.position).addScaledVector(dragPlaneNormal, distance);
+  dragPlane.setFromNormalAndCoplanarPoint(dragPlaneNormal, dragPlanePoint);
+  const hit = dragRaycaster.ray.intersectPlane(dragPlane, dragTarget);
+  if (!hit) {
+    return null;
+  }
+  return dragTarget.clone();
+};
+
+const beginDrag = (hit: { entity: Entity; point: THREE.Vector3; distance: number }) => {
+  const grabOffset = hit.entity.body.position.clone().sub(hit.point);
+  const initialTarget = hit.point.clone().add(grabOffset);
+  dragging = {
+    entity: hit.entity,
+    grabOffset,
+    distance: hit.distance,
+    axisLock,
+    anchor: hit.entity.body.position.clone(),
+    lastTarget: initialTarget,
+    dragVelocity: new THREE.Vector3(),
+    springStrength: 45,
+    springDamping: 8
+  };
+  hit.entity.body.angularVelocity.set(0, 0, 0);
+  hit.entity.body.sleeping = false;
+  input.setPrimaryLookEnabled(false);
+};
+
+const updateDrag = (
+  pointer: { x: number; y: number; width: number; height: number },
+  dt: number
+) => {
+  if (!dragging) {
+    return;
+  }
+
+  if (dragging.axisLock !== axisLock) {
+    dragging.axisLock = axisLock;
+    dragging.anchor.copy(dragging.entity.body.position);
+    dragging.lastTarget.copy(dragging.entity.body.position);
+    dragging.dragVelocity.set(0, 0, 0);
+  }
+
+  const hit = getPointerPlaneHit(pointer, dragging.distance);
+  if (!hit) {
+    return;
+  }
+
+  let target = hit.add(dragging.grabOffset);
+  if (dragging.axisLock) {
+    const axis =
+      dragging.axisLock === "x"
+        ? new THREE.Vector3(1, 0, 0)
+        : dragging.axisLock === "y"
+          ? new THREE.Vector3(0, 1, 0)
+          : new THREE.Vector3(0, 0, 1);
+    const delta = target.clone().sub(dragging.anchor);
+    target = dragging.anchor.clone().add(axis.multiplyScalar(delta.dot(axis)));
+  }
+
+  if (dt > 0) {
+    dragging.dragVelocity.copy(target).sub(dragging.lastTarget).multiplyScalar(1 / dt);
+  }
+  dragging.lastTarget.copy(target);
+
+  const body = dragging.entity.body;
+  if (dragging.axisLock) {
+    body.position.copy(target);
+    body.velocity.set(0, 0, 0);
+    body.angularVelocity.set(0, 0, 0);
+    body.sleeping = true;
+    dragging.entity.object.position.copy(target);
+    return;
+  }
+
+  const error = target.sub(body.position);
+  const accel = error.multiplyScalar(dragging.springStrength);
+  accel.addScaledVector(body.velocity, -dragging.springDamping);
+  body.velocity.addScaledVector(accel, dt);
+  body.sleeping = false;
+};
+
+const endDrag = () => {
+  if (!dragging) {
+    return;
+  }
+  if (!dragging.axisLock) {
+    const body = dragging.entity.body;
+    const offset = dragging.grabOffset;
+    const offsetLengthSq = offset.lengthSq();
+    const releaseVelocity = dragging.dragVelocity.clone();
+    const releaseSpeed = releaseVelocity.length();
+    if (releaseSpeed > 0.001) {
+      const maxSpeed = 30;
+      if (releaseSpeed > maxSpeed) {
+        releaseVelocity.multiplyScalar(maxSpeed / releaseSpeed);
+      }
+      body.velocity.copy(releaseVelocity);
+    }
+    if (offsetLengthSq > 0.0001 && releaseVelocity.lengthSq() > 0.01) {
+      const spinAxis = new THREE.Vector3().crossVectors(offset, releaseVelocity);
+      const spin = spinAxis.multiplyScalar(0.45 / Math.max(0.05, offsetLengthSq));
+      body.angularVelocity.add(spin);
+    }
+  }
+  dragging.entity.body.sleeping = false;
+  dragging = null;
+  input.setPrimaryLookEnabled(true);
 };
 
 const findFirstMesh = (object: THREE.Object3D): THREE.Mesh | null => {
@@ -347,11 +553,15 @@ const renderQueuePanel = () => {
   for (const [jobId, job] of jobs.entries()) {
     const row = document.createElement("div");
     row.className = "queue-row";
-    row.innerHTML = `\n      <div class=\"queue-thumb\">${job.thumbnailUrl ? `<img src=\"${job.thumbnailUrl}\" />` : \"\"}</div>\n      <div class=\"queue-prompt\">${job.prompt}</div>\n      <div class=\"queue-status\">${job.status}</div>\n    `;
+    const thumb = job.thumbnailUrl ? `<img src="${job.thumbnailUrl}" />` : "";
+    row.innerHTML = `
+      <div class="queue-thumb">${thumb}</div>
+      <div class="queue-prompt">${job.prompt}</div>
+      <div class="queue-status">${job.status}</div>
+    `;
     row.addEventListener("click", () => {
       if (job.entity) {
-        selected = job.entity;
-        renderInspectorPanel();
+        setSelectedEntity(job.entity);
       }
     });
     list.appendChild(row);
@@ -449,6 +659,22 @@ const renderInspectorPanel = () => {
   inspectorPanel.appendChild(saveButton);
 };
 
+const updateSelectionHelper = () => {
+  if (!selected) {
+    selectionHelper.visible = false;
+    return;
+  }
+  selectionHelper.object = selected.object;
+  selectionHelper.update();
+  selectionHelper.visible = true;
+};
+
+const setSelectedEntity = (entity: Entity | null) => {
+  selected = entity;
+  renderInspectorPanel();
+  updateSelectionHelper();
+};
+
 const renderLibraryPanel = () => {
   libraryPanel.innerHTML = "";
   const title = document.createElement("div");
@@ -478,8 +704,7 @@ const renderLibraryPanel = () => {
         position: getSpawnPosition(),
         assetId: prefab.prefabId
       });
-      selected = entity;
-      renderInspectorPanel();
+      setSelectedEntity(entity);
     });
     list.appendChild(row);
   }
@@ -519,6 +744,9 @@ sessionClient.onMessage(async (message: SessionServerMessage) => {
     if (existing) {
       engine.removeEntity(existing);
       networkEntities.delete(message.entityId);
+      if (selected?.id === existing.id) {
+        setSelectedEntity(null);
+      }
     }
   }
 });
@@ -563,9 +791,8 @@ api.onEvent(async (event) => {
       assetId: asset.assetId,
       thumbnailUrl: asset.files?.thumbnailUrl
     });
-    selected = entity;
     renderQueuePanel();
-    renderInspectorPanel();
+    setSelectedEntity(entity);
   }
 });
 
@@ -577,15 +804,28 @@ const tick = (time: number) => {
 
   const snapshot = input.snapshot(viewport);
 
-  if (mode === "fly" && snapshot.pointer.primaryPressed) {
-    const hit = engine.pickEntityAtPointer(snapshot.pointer);
-    if (hit) {
-      selected = hit;
-      renderInspectorPanel();
+  if (mode === "fly") {
+    if (snapshot.pointer.primaryPressed) {
+      const hit = pickEntityHit(snapshot.pointer);
+      if (hit) {
+        setSelectedEntity(hit.entity);
+        beginDrag(hit);
+      } else {
+        input.setPrimaryLookEnabled(true);
+      }
+    }
+
+    if (snapshot.pointer.primaryDown && dragging) {
+      updateDrag(snapshot.pointer, dt);
+    }
+
+    if (snapshot.pointer.primaryReleased) {
+      endDrag();
     }
   }
 
   engine.update(dt, snapshot);
+  updateSelectionHelper();
   renderer.render(engine.scene, engine.camera);
 
   if (sessionClientId && playerEntityId && time - lastNetworkSync > 120) {

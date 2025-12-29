@@ -10,6 +10,8 @@ export class WebInput {
     secondaryDown: false
   };
   private look = { x: 0, y: 0 };
+  private pan = { x: 0, y: 0 };
+  private zoom = 0;
   private primaryPressed = false;
   private primaryReleased = false;
   private secondaryPressed = false;
@@ -18,6 +20,9 @@ export class WebInput {
   private pointerLocked = false;
   private pointerLockEnabled = false;
   private sensitivity = 0.002;
+  private panSensitivity = 0.01;
+  private zoomSensitivity = 0.06;
+  private primaryLookEnabled = true;
 
   constructor(element: HTMLElement) {
     this.element = element;
@@ -25,6 +30,7 @@ export class WebInput {
     this.element.addEventListener("mousedown", this.handleMouseDown);
     this.element.addEventListener("mouseup", this.handleMouseUp);
     this.element.addEventListener("mousemove", this.handleMouseMove);
+    this.element.addEventListener("wheel", this.handleWheel, { passive: false });
     this.element.addEventListener("contextmenu", (event) => event.preventDefault());
     window.addEventListener("keydown", this.handleKeyDown);
     window.addEventListener("keyup", this.handleKeyUp);
@@ -33,6 +39,10 @@ export class WebInput {
 
   setPointerLockEnabled(enabled: boolean) {
     this.pointerLockEnabled = enabled;
+  }
+
+  setPrimaryLookEnabled(enabled: boolean) {
+    this.primaryLookEnabled = enabled;
   }
 
   requestPointerLock() {
@@ -56,6 +66,8 @@ export class WebInput {
     const snapshot: InputSnapshot = {
       move: { x: moveX, y: moveY, z: moveZ },
       look: { x: this.look.x, y: this.look.y },
+      pan: { x: this.pan.x, y: this.pan.y },
+      zoom: this.zoom,
       sprint,
       pointer: {
         x: pointerX,
@@ -73,6 +85,9 @@ export class WebInput {
 
     this.look.x = 0;
     this.look.y = 0;
+    this.pan.x = 0;
+    this.pan.y = 0;
+    this.zoom = 0;
     this.primaryPressed = false;
     this.primaryReleased = false;
     this.secondaryPressed = false;
@@ -127,9 +142,23 @@ export class WebInput {
     this.pointer.x = event.clientX - rect.left;
     this.pointer.y = event.clientY - rect.top;
 
-    if (this.pointerLocked || this.rightDown) {
+    const primaryLook = this.pointer.primaryDown && this.primaryLookEnabled;
+    if (this.pointerLocked || this.rightDown || primaryLook) {
       this.look.x -= event.movementX * this.sensitivity;
       this.look.y -= event.movementY * this.sensitivity;
+    }
+  };
+
+  private handleWheel = (event: WheelEvent) => {
+    event.preventDefault();
+    const scale = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : 1;
+    const deltaX = event.deltaX * scale;
+    const deltaY = event.deltaY * scale;
+    if (event.ctrlKey) {
+      this.zoom += -deltaY * this.zoomSensitivity;
+    } else {
+      this.pan.x += -deltaX * this.panSensitivity;
+      this.pan.y += -deltaY * this.panSensitivity;
     }
   };
 

@@ -26,6 +26,7 @@ export class FlyController {
     forward.normalize();
 
     const right = new THREE.Vector3().crossVectors(forward, camera.up).normalize();
+    const up = new THREE.Vector3().crossVectors(right, forward).normalize();
 
     const move = new THREE.Vector3();
     move.addScaledVector(right, input.move.x);
@@ -35,6 +36,15 @@ export class FlyController {
     if (move.lengthSq() > 0) {
       move.normalize();
       camera.position.addScaledVector(move, speed * dt);
+    }
+
+    if (input.pan.x !== 0 || input.pan.y !== 0) {
+      camera.position.addScaledVector(right, input.pan.x);
+      camera.position.addScaledVector(up, input.pan.y);
+    }
+
+    if (input.zoom !== 0) {
+      camera.position.addScaledVector(forward, input.zoom);
     }
   }
 }
