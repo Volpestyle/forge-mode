@@ -13,10 +13,17 @@ body {
   background: #0e1414;
 }
 
+#app,
+body,
+html {
+  width: 100%;
+  height: 100%;
+}
+
 #app {
-  width: 100vw;
-  height: 100vh;
-  position: relative;
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
 }
 
 canvas {
@@ -68,7 +75,9 @@ canvas {
   top: 16px;
   display: grid;
   gap: 12px;
+  grid-template-columns: minmax(0, 1fr);
   width: 280px;
+  max-width: calc(100% - 32px);
 }
 
 .panel {
@@ -78,6 +87,8 @@ canvas {
   padding: 12px;
   color: #f0f4f7;
   font-size: 12px;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .panel-title {
@@ -91,10 +102,12 @@ canvas {
 .prompt-row {
   display: flex;
   gap: 8px;
+  min-width: 0;
 }
 
 .prompt-input {
   flex: 1;
+  min-width: 0;
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 8px;
@@ -170,6 +183,7 @@ canvas {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 
 .queue-status {
