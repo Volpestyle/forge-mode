@@ -41,14 +41,14 @@ Monorepo for the Prompt-to-World sandbox. MVP1 adds prompt-to-recipe jobs and a 
 ## Local setup
 
 ```bash
-npm install
+pnpm install
 ```
 
 ## Run server (MVP1)
 
 ```bash
-npm run dev:engine
-npm run dev:server
+pnpm dev:engine
+pnpm dev:server
 ```
 
 Environment (optional):
@@ -66,8 +66,8 @@ Environment (optional):
 ## Run web
 
 ```bash
-npm run dev:engine
-npm run dev:web
+pnpm dev:engine
+pnpm dev:web
 ```
 
 Controls (web):
@@ -81,8 +81,8 @@ Controls (web):
 ## Run mobile (Expo)
 
 ```bash
-npm run dev:engine
-npm run dev:mobile
+pnpm dev:engine
+pnpm dev:mobile
 ```
 
 Controls (mobile):

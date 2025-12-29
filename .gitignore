@@ -12,3 +12,4 @@ apps/mobile/*.tar.gz
 apps/mobile/.gradle/
 apps/mobile/.idea/
 apps/server/storage/
+*.tsbuildinfo

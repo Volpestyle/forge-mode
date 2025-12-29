@@ -1,17 +1,18 @@
 {
   "name": "forge-mode",
   "private": true,
+  "packageManager": "pnpm@9.12.1",
   "workspaces": [
     "apps/*",
     "packages/*"
   ],
   "scripts": {
-    "dev:web": "npm run -w @forge/web dev",
-    "dev:mobile": "npm run -w @forge/mobile start",
-    "dev:engine": "npm run -w @forge/engine dev",
-    "dev:server": "npm run -w @forge/server dev",
-    "build:web": "npm run -w @forge/web build",
-    "build:engine": "npm run -w @forge/engine build",
-    "build:server": "npm run -w @forge/server build"
+    "dev:web": "pnpm --filter @forge/web dev",
+    "dev:mobile": "pnpm --filter @forge/mobile start",
+    "dev:engine": "pnpm --filter @forge/engine dev",
+    "dev:server": "pnpm --filter @forge/server dev",
+    "build:web": "pnpm --filter @forge/web build",
+    "build:engine": "pnpm --filter @forge/engine build",
+    "build:server": "pnpm --filter @forge/server build"
   }
 }
