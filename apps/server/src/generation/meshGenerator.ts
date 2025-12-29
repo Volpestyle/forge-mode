@@ -59,28 +59,34 @@ export async function generateMesh(recipe: Recipe) {
     return createPlaceholderGlb();
   }
 
-  const response = await fetch(`${config.llmhub.baseUrl}${config.llmhub.meshPath}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${config.llmhub.apiKey}`
-    },
-    body: JSON.stringify({
-      model: config.llmhub.meshModel,
-      prompt: buildPrompt(recipe)
-    })
-  });
+  const provider = config.llmhub.meshProvider ?? config.llmhub.provider;
+  try {
+    const response = await fetch(`${config.llmhub.baseUrl}${config.llmhub.meshPath}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${config.llmhub.apiKey}`
+      },
+      body: JSON.stringify({
+        provider,
+        model: config.llmhub.meshModel,
+        prompt: buildPrompt(recipe)
+      })
+    });
 
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`LLMHub mesh error ${response.status}: ${detail}`);
-  }
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(`LLMHub mesh error ${response.status}: ${detail}`);
+    }
 
-  const payload = (await response.json()) as { data?: string; output?: string; glbBase64?: string };
-  const base64 = payload.data ?? payload.output ?? payload.glbBase64 ?? "";
-  if (!base64) {
+    const payload = (await response.json()) as { data?: string; output?: string; glbBase64?: string };
+    const base64 = payload.data ?? payload.output ?? payload.glbBase64 ?? "";
+    if (!base64) {
+      return createPlaceholderGlb();
+    }
+
+    return Uint8Array.from(Buffer.from(base64, "base64"));
+  } catch (error) {
     return createPlaceholderGlb();
   }
-
-  return Uint8Array.from(Buffer.from(base64, "base64"));
 }

@@ -50,6 +50,7 @@ export async function generateTextures(recipe: Recipe) {
     };
   }
 
+  const provider = config.llmhub.imageProvider ?? config.llmhub.provider;
   const callImage = async (prompt: string) => {
     const response = await fetch(`${config.llmhub.baseUrl}${config.llmhub.imagePath}`, {
       method: "POST",
@@ -58,9 +59,10 @@ export async function generateTextures(recipe: Recipe) {
         Authorization: `Bearer ${config.llmhub.apiKey}`
       },
       body: JSON.stringify({
+        provider,
         model: config.llmhub.imageModel,
         prompt,
-        size: "1K"
+        size: "1024x1024"
       })
     });
 
@@ -72,6 +74,9 @@ export async function generateTextures(recipe: Recipe) {
     const payload = (await response.json()) as { mime?: string; data?: string; output?: string };
     const mime = payload.mime ?? "image/png";
     const data = payload.data ?? payload.output ?? "";
+    if (!data) {
+      throw new Error("LLMHub image response missing data");
+    }
     return toDataUrl(mime, data);
   };
 

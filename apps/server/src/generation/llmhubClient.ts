@@ -1,6 +1,66 @@
 import { recipeSchema, Recipe } from "@forge/shared";
 import { config } from "../config";
 
+const recipeJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["kind", "name", "scaleMeters"],
+  properties: {
+    kind: { type: "string", enum: ["prop", "structure", "character", "terrain_stamp"] },
+    name: { type: "string" },
+    scaleMeters: {
+      type: "array",
+      items: { type: "number" },
+      minItems: 3,
+      maxItems: 3
+    },
+    style: { type: "string" },
+    materials: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["type"],
+        properties: {
+          type: { type: "string" },
+          roughness: { type: "number", minimum: 0, maximum: 1 },
+          metalness: { type: "number", minimum: 0, maximum: 1 },
+          color: { type: "string" }
+        }
+      }
+    },
+    physics: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        body: { type: "string", enum: ["static", "dynamic", "kinematic"] },
+        massKg: { type: "number", minimum: 0 },
+        collider: { type: "string", enum: ["box", "convex_hull", "mesh"] },
+        friction: { type: "number", minimum: 0, maximum: 10 },
+        restitution: { type: "number", minimum: 0, maximum: 1 }
+      }
+    },
+    interaction: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        pickup: { type: "boolean" },
+        pushable: { type: "boolean" },
+        damageable: { type: "boolean" }
+      }
+    },
+    generationPlan: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        meshStrategy: { type: "string", enum: ["text_to_3d", "image_to_3d", "procedural"] },
+        textureStrategy: { type: "string", enum: ["generated_pbr", "pbr_from_image", "flat"] },
+        lods: { type: "boolean" }
+      }
+    }
+  }
+} as const;
+
 const buildPrompt = (prompt: string, assetType?: Recipe["kind"]) => {
   const typeHint = assetType ? `Asset type: ${assetType}.` : "";
   return [
@@ -11,11 +71,19 @@ const buildPrompt = (prompt: string, assetType?: Recipe["kind"]) => {
   ].join("\n");
 };
 
+const stripJsonFence = (value: string) =>
+  value
+    .trim()
+    .replace(/^```(?:json)?/i, "")
+    .replace(/```$/i, "")
+    .trim();
+
 export async function generateRecipe(prompt: string, assetType?: Recipe["kind"]) {
   if (!config.llmhub.baseUrl || !config.llmhub.apiKey) {
     return null;
   }
 
+  const provider = config.llmhub.intentProvider ?? config.llmhub.provider;
   const response = await fetch(`${config.llmhub.baseUrl}${config.llmhub.intentPath}`, {
     method: "POST",
     headers: {
@@ -23,9 +91,22 @@ export async function generateRecipe(prompt: string, assetType?: Recipe["kind"])
       Authorization: `Bearer ${config.llmhub.apiKey}`
     },
     body: JSON.stringify({
+      provider,
       model: config.llmhub.intentModel,
-      prompt: buildPrompt(prompt, assetType),
-      response_format: "json"
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: buildPrompt(prompt, assetType) }]
+        }
+      ],
+      responseFormat: {
+        type: "json_schema",
+        jsonSchema: {
+          name: "Recipe",
+          schema: recipeJsonSchema,
+          strict: true
+        }
+      }
     })
   });
 
@@ -34,9 +115,10 @@ export async function generateRecipe(prompt: string, assetType?: Recipe["kind"])
     throw new Error(`LLMHub error ${response.status}: ${detail}`);
   }
 
-  const payload = (await response.json()) as { json?: unknown; output?: unknown };
-  const raw = payload.json ?? payload.output ?? payload;
-  const parsed = recipeSchema.safeParse(raw);
+  const payload = (await response.json()) as { text?: string; output?: unknown };
+  const raw = typeof payload.text === "string" ? payload.text : payload.output ?? payload;
+  const value = typeof raw === "string" ? JSON.parse(stripJsonFence(raw)) : raw;
+  const parsed = recipeSchema.safeParse(value);
   if (!parsed.success) {
     throw new Error("LLMHub response failed recipe schema validation");
   }
