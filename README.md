@@ -54,10 +54,14 @@ pnpm dev:server
 Environment (optional):
 - `LLMHUB_BASE_URL`
 - `LLMHUB_API_KEY`
+- `LLMHUB_PROVIDER` (default provider for all calls, defaults to `openai`)
+- `LLMHUB_INTENT_PROVIDER`
 - `LLMHUB_INTENT_MODEL`
 - `LLMHUB_INTENT_PATH`
+- `LLMHUB_IMAGE_PROVIDER`
 - `LLMHUB_IMAGE_MODEL`
 - `LLMHUB_IMAGE_PATH`
+- `LLMHUB_MESH_PROVIDER`
 - `LLMHUB_MESH_MODEL`
 - `LLMHUB_MESH_PATH`
 - `PUBLIC_BASE_URL` (defaults to `http://localhost:8080`)
